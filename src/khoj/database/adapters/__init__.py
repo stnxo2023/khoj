@@ -449,15 +449,19 @@ class ProcessLockAdapters:
         return ProcessLock.objects.create(name=process_name, max_duration_in_seconds=max_duration_in_seconds)
 
     @staticmethod
-    def is_process_locked(process_name: str):
+    def is_process_locked_by_name(process_name: str):
         process_lock = ProcessLock.objects.filter(name=process_name).first()
         if not process_lock:
             return False
+        return ProcessLockAdapters.is_process_locked(process_lock)
+
+    @staticmethod
+    def is_process_locked(process_lock: ProcessLock):
         if process_lock.started_at + timedelta(seconds=process_lock.max_duration_in_seconds) < datetime.now(
             tz=timezone.utc
         ):
             process_lock.delete()
-            logger.info(f"🔓 Deleted stale {process_name} process lock on timeout")
+            logger.info(f"🔓 Deleted stale {process_lock.name} process lock on timeout")
             return False
         return True
 
@@ -468,7 +472,7 @@ class ProcessLockAdapters:
     @staticmethod
     def run_with_lock(func: Callable, operation: ProcessLock.Operation, max_duration_in_seconds: int = 600, **kwargs):
         # Exit early if process lock is already taken
-        if ProcessLockAdapters.is_process_locked(operation):
+        if ProcessLockAdapters.is_process_locked_by_name(operation):
             logger.debug(f"🔒 Skip executing {func} as {operation} lock is already taken")
             return
 
@@ -645,7 +649,11 @@ class ConversationAdapters:
 
     @staticmethod
     def get_conversation_sessions(user: KhojUser, client_application: ClientApplication = None):
-        return Conversation.objects.filter(user=user, client=client_application).order_by("-updated_at")
+        return (
+            Conversation.objects.filter(user=user, client=client_application)
+            .prefetch_related("agent")
+            .order_by("-updated_at")
+        )
 
     @staticmethod
     async def aset_conversation_title(
@@ -748,7 +756,7 @@ class ConversationAdapters:
         voice_model_config = await UserVoiceModelConfig.objects.filter(user=user).prefetch_related("setting").afirst()
         if voice_model_config:
             return voice_model_config.setting
-        return None
+        return await VoiceModelOption.objects.afirst()
 
     @staticmethod
     def get_voice_model_options():
@@ -759,7 +767,7 @@ class ConversationAdapters:
         voice_model_config = UserVoiceModelConfig.objects.filter(user=user).prefetch_related("setting").first()
         if voice_model_config:
             return voice_model_config.setting
-        return None
+        return VoiceModelOption.objects.first()
 
     @staticmethod
     def get_default_conversation_config():
@@ -798,11 +806,14 @@ class ConversationAdapters:
     def create_conversation_from_public_conversation(
         user: KhojUser, public_conversation: PublicConversation, client_app: ClientApplication
     ):
+        scrubbed_title = public_conversation.title if public_conversation.title else public_conversation.slug
+        if scrubbed_title:
+            scrubbed_title = scrubbed_title.replace("-", " ")
         return Conversation.objects.create(
             user=user,
             conversation_log=public_conversation.conversation_log,
             client=client_app,
-            slug=public_conversation.slug,
+            slug=scrubbed_title,
             title=public_conversation.title,
             agent=public_conversation.agent,
         )
@@ -943,6 +954,34 @@ class ConversationAdapters:
         )
         return new_config
 
+    @staticmethod
+    def add_files_to_filter(user: KhojUser, conversation_id: int, files: List[str]):
+        conversation = ConversationAdapters.get_conversation_by_user(user, conversation_id=conversation_id)
+        file_list = EntryAdapters.get_all_filenames_by_source(user, "computer")
+        for filename in files:
+            if filename in file_list and filename not in conversation.file_filters:
+                conversation.file_filters.append(filename)
+        conversation.save()
+
+        # remove files from conversation.file_filters that are not in file_list
+        conversation.file_filters = [file for file in conversation.file_filters if file in file_list]
+        conversation.save()
+        return conversation.file_filters
+
+    @staticmethod
+    def remove_files_from_filter(user: KhojUser, conversation_id: int, files: List[str]):
+        conversation = ConversationAdapters.get_conversation_by_user(user, conversation_id=conversation_id)
+        for filename in files:
+            if filename in conversation.file_filters:
+                conversation.file_filters.remove(filename)
+        conversation.save()
+
+        # remove files from conversation.file_filters that are not in file_list
+        file_list = EntryAdapters.get_all_filenames_by_source(user, "computer")
+        conversation.file_filters = [file for file in conversation.file_filters if file in file_list]
+        conversation.save()
+        return conversation.file_filters
+
 
 class FileObjectAdapters:
     @staticmethod
@@ -1070,6 +1109,16 @@ class EntryAdapters:
     @staticmethod
     async def adelete_entry_by_file(user: KhojUser, file_path: str):
         return await Entry.objects.filter(user=user, file_path=file_path).adelete()
+
+    @staticmethod
+    async def adelete_entries_by_filenames(user: KhojUser, filenames: List[str], batch_size=1000):
+        deleted_count = 0
+        for i in range(0, len(filenames), batch_size):
+            batch = filenames[i : i + batch_size]
+            count, _ = await Entry.objects.filter(user=user, file_path__in=batch).adelete()
+            deleted_count += count
+
+        return deleted_count
 
     @staticmethod
     def get_all_filenames_by_source(user: KhojUser, file_source: str):

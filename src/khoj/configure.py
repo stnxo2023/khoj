@@ -42,7 +42,7 @@ from khoj.database.adapters import (
 )
 from khoj.database.models import ClientApplication, KhojUser, ProcessLock, Subscription
 from khoj.processor.embeddings import CrossEncoderModel, EmbeddingsModel
-from khoj.routers.indexer import configure_content, configure_search
+from khoj.routers.api_content import configure_content, configure_search
 from khoj.routers.twilio import is_twilio_enabled
 from khoj.utils import constants, state
 from khoj.utils.config import SearchType
@@ -308,16 +308,16 @@ def configure_routes(app):
     from khoj.routers.api import api
     from khoj.routers.api_agents import api_agents
     from khoj.routers.api_chat import api_chat
-    from khoj.routers.api_config import api_config
-    from khoj.routers.indexer import indexer
+    from khoj.routers.api_content import api_content
+    from khoj.routers.api_model import api_model
     from khoj.routers.notion import notion_router
     from khoj.routers.web_client import web_client
 
     app.include_router(api, prefix="/api")
     app.include_router(api_chat, prefix="/api/chat")
     app.include_router(api_agents, prefix="/api/agents")
-    app.include_router(api_config, prefix="/api/config")
-    app.include_router(indexer, prefix="/api/v1/index")
+    app.include_router(api_model, prefix="/api/model")
+    app.include_router(api_content, prefix="/api/content")
     app.include_router(notion_router, prefix="/api/notion")
     app.include_router(web_client)
 
@@ -336,7 +336,7 @@ def configure_routes(app):
     if is_twilio_enabled():
         from khoj.routers.api_phone import api_phone
 
-        app.include_router(api_phone, prefix="/api/config/phone")
+        app.include_router(api_phone, prefix="/api/phone")
         logger.info("📞 Enabled Twilio")
 
 
@@ -417,6 +417,27 @@ def delete_old_user_requests():
 @schedule.repeat(schedule.every(17).minutes)
 def wakeup_scheduler():
     # Wake up the scheduler to ensure it runs the scheduled tasks. This is because the elected leader may not always be aware of tasks scheduled on other workers.
+    TWELVE_HOURS = 43200
+
+    # If the worker currently possesses a process lock, check if it is valid.
+
+    if state.schedule_leader_process_lock:
+        if not ProcessLockAdapters.is_process_locked(state.schedule_leader_process_lock):
+            state.schedule_leader_process_lock = None
+            state.scheduler.pause()
+
+    # Get the current process lock
+    schedule_leader_process_lock = ProcessLockAdapters.get_process_lock(ProcessLock.Operation.SCHEDULE_LEADER)
+
+    # Check if the process lock is still active. If not, create a new process lock. This worker will become the scheduler leader.
+    if not ProcessLockAdapters.is_process_locked(schedule_leader_process_lock):
+        schedule_leader_process_lock = ProcessLockAdapters.set_process_lock(
+            ProcessLock.Operation.SCHEDULE_LEADER, max_duration_in_seconds=TWELVE_HOURS
+        )
+        state.schedule_leader_process_lock = schedule_leader_process_lock
+        state.scheduler.resume()
+        logger.info("🔔 Scheduler leader process lock acquired")
+
     if state.schedule_leader_process_lock:
         state.scheduler.wakeup()
     else:

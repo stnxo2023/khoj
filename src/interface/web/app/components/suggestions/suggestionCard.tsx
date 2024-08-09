@@ -1,32 +1,46 @@
-'use client'
+"use client";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 import styles from "./suggestions.module.css";
+import { converColorToBgGradient } from "@/app/common/colorUtils";
+import { convertSuggestionTitleToIconClass } from "./suggestionsData";
 
 interface SuggestionCardProps {
-	title: string;
-	body: string;
-	link: string;
-	styleClass: string;
+    title: string;
+    body: string;
+    link: string;
+    color: string;
 }
 
 export default function SuggestionCard(data: SuggestionCardProps) {
+    const bgColors = converColorToBgGradient(data.color);
+    const cardClassName = `${styles.card} ${bgColors} md:w-full md:h-fit sm:w-full h-fit md:w-[200px] md:h-[200px] cursor-pointer`;
+    const titleClassName = `${styles.title} pt-2 dark:text-white dark:font-bold`;
+    const descriptionClassName = `${styles.text} dark:text-white`;
 
-	return (
-		<div className={styles[data.styleClass] + " " + styles.card}>
-			<div className={styles.title}>
-				{data.title}
-			</div>
-			<div className={styles.body}>
-				{data.body}
-			</div>
-			<div>
-				<a
-					href={data.link}
-					target="_blank"
-					rel="noopener noreferrer"
-				>click me
-				</a>
-			</div>
-		</div>
-	);
+    const cardContent = (
+        <Card className={cardClassName}>
+            <CardHeader className="m-0 p-2 pb-1 relative">
+                <div className="flex flex-row md:flex-col">
+                    {convertSuggestionTitleToIconClass(data.title, data.color.toLowerCase())}
+                    <CardTitle className={titleClassName}>{data.title}</CardTitle>
+                </div>
+            </CardHeader>
+            <CardContent className="m-0 p-2 pr-4 pt-1">
+                <CardDescription
+                    className={`${descriptionClassName} sm:line-clamp-2 md:line-clamp-4`}
+                >
+                    {data.body}
+                </CardDescription>
+            </CardContent>
+        </Card>
+    );
+
+    return data.link ? (
+        <a href={data.link} className="no-underline">
+            {cardContent}
+        </a>
+    ) : (
+        cardContent
+    );
 }

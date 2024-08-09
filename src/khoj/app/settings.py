@@ -30,7 +30,7 @@ DEBUG = in_debug_mode()
 
 # All Subdomains of KHOJ_DOMAIN are trusted
 KHOJ_DOMAIN = os.getenv("KHOJ_DOMAIN", "khoj.dev")
-ALLOWED_HOSTS = [f".{KHOJ_DOMAIN}", "localhost", "127.0.0.1", "[::1]"]
+ALLOWED_HOSTS = [f".{KHOJ_DOMAIN}", "localhost", "127.0.0.1", "[::1]", f"{KHOJ_DOMAIN}"]
 
 CSRF_TRUSTED_ORIGINS = [
     f"https://*.{KHOJ_DOMAIN}",
@@ -166,7 +166,12 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_ROOT = BASE_DIR / "static"
-STATICFILES_DIRS = [BASE_DIR / "interface/web", BASE_DIR / "interface/email", BASE_DIR / "interface/built"]
+STATICFILES_DIRS = [
+    BASE_DIR / "interface/web",
+    BASE_DIR / "interface/email",
+    BASE_DIR / "interface/built",
+    BASE_DIR / "interface/compiled",
+]
 STATIC_URL = "/static/"
 
 # Default primary key field type
