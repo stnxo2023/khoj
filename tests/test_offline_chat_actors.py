@@ -2,12 +2,12 @@ from datetime import datetime
 
 import pytest
 
-from khoj.database.models import ChatModelOptions
+from khoj.database.models import ChatModel
 from khoj.routers.helpers import aget_data_sources_and_output_format
 from khoj.utils.helpers import ConversationCommand
 from tests.helpers import ConversationFactory, generate_chat_history, get_chat_provider
 
-SKIP_TESTS = get_chat_provider(default=None) != ChatModelOptions.ModelType.OFFLINE
+SKIP_TESTS = get_chat_provider(default=None) != ChatModel.ModelType.OFFLINE
 pytestmark = pytest.mark.skipif(
     SKIP_TESTS,
     reason="Disable in CI to avoid long test runs.",
@@ -22,7 +22,6 @@ from khoj.processor.conversation.offline.chat_model import (
     filter_questions,
 )
 from khoj.processor.conversation.offline.utils import download_model
-from khoj.processor.conversation.utils import message_to_log
 from khoj.utils.constants import default_offline_chat_models
 
 

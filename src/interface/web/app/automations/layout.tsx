@@ -2,10 +2,12 @@ import type { Metadata } from "next";
 import { Toaster } from "@/components/ui/toaster";
 
 import "../globals.css";
+import { ContentSecurityPolicy } from "../common/layoutHelper";
 
 export const metadata: Metadata = {
     title: "Khoj AI - Automations",
-    description: "Use Autoomations with Khoj to simplify the process of running repetitive tasks.",
+    description:
+        "Use Khoj Automations to get tailored research and event based notifications directly in your inbox.",
     icons: {
         icon: "/static/assets/icons/khoj_lantern.ico",
         apple: "/static/assets/icons/khoj_lantern_256x256.png",
@@ -13,10 +15,16 @@ export const metadata: Metadata = {
     openGraph: {
         siteName: "Khoj AI",
         title: "Khoj AI - Automations",
-        description: "Your Second Brain.",
+        description:
+            "Use Khoj Automations to get tailored research and event based notifications directly in your inbox.",
         url: "https://app.khoj.dev/automations",
         type: "website",
         images: [
+            {
+                url: "https://assets.khoj.dev/khoj_hero.png",
+                width: 940,
+                height: 525,
+            },
             {
                 url: "https://assets.khoj.dev/khoj_lantern_256x256.png",
                 width: 256,
@@ -32,9 +40,12 @@ export default function RootLayout({
     children: React.ReactNode;
 }>) {
     return (
-        <div>
-            {children}
-            <Toaster />
-        </div>
+        <html>
+            <ContentSecurityPolicy />
+            <body>
+                {children}
+                <Toaster />
+            </body>
+        </html>
     );
 }

@@ -57,7 +57,7 @@ def login_page(request: Request):
     if request.user.is_authenticated:
         return RedirectResponse(url=next_url)
     google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
-    redirect_uri = str(request.app.url_path_for("auth"))
+    redirect_uri = str(request.app.url_path_for("auth_post"))
     return templates.TemplateResponse(
         "login.html",
         context={
@@ -134,3 +134,8 @@ def automations_config_page(
             "request": request,
         },
     )
+
+
+@web_client.get("/.well-known/assetlinks.json", response_class=FileResponse)
+def assetlinks(request: Request):
+    return FileResponse(constants.assetlinks_file_path)

@@ -1,24 +1,28 @@
 import csv
 import json
+from datetime import datetime, timedelta
 
 from apscheduler.job import Job
 from django.contrib import admin, messages
-from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.models import Group
 from django.http import HttpResponse
-from django_apscheduler.admin import DjangoJobAdmin
+from django_apscheduler.admin import DjangoJobAdmin, DjangoJobExecutionAdmin
 from django_apscheduler.jobstores import DjangoJobStore
-from django_apscheduler.models import DjangoJob
+from django_apscheduler.models import DjangoJob, DjangoJobExecution
+from unfold import admin as unfold_admin
 
 from khoj.database.models import (
     Agent,
-    ChatModelOptions,
+    AiModelApi,
+    ChatModel,
     ClientApplication,
     Conversation,
     Entry,
     GithubConfig,
     KhojUser,
     NotionConfig,
-    OpenAIProcessorConversationConfig,
     ProcessLock,
     ReflectiveQuestion,
     SearchModelConfig,
@@ -34,10 +38,8 @@ from khoj.database.models import (
 )
 from khoj.utils.helpers import ImageIntentType
 
-admin.site.unregister(DjangoJob)
 
-
-class KhojDjangoJobAdmin(DjangoJobAdmin):
+class KhojDjangoJobAdmin(DjangoJobAdmin, unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "next_run_time",
@@ -61,10 +63,57 @@ class KhojDjangoJobAdmin(DjangoJobAdmin):
         return queryset, use_distinct
 
 
+class KhojDjangoJobExecutionAdmin(DjangoJobExecutionAdmin, unfold_admin.ModelAdmin):
+    pass
+
+
+admin.site.unregister(DjangoJob)
 admin.site.register(DjangoJob, KhojDjangoJobAdmin)
+admin.site.unregister(DjangoJobExecution)
+admin.site.register(DjangoJobExecution, KhojDjangoJobExecutionAdmin)
 
 
-class KhojUserAdmin(UserAdmin):
+class GroupAdmin(BaseGroupAdmin, unfold_admin.ModelAdmin):
+    pass
+
+
+class UserAdmin(BaseUserAdmin, unfold_admin.ModelAdmin):
+    pass
+
+
+class KhojUserAdmin(UserAdmin, unfold_admin.ModelAdmin):
+    class DateJoinedAfterFilter(admin.SimpleListFilter):
+        title = "Joined after"
+        parameter_name = "joined_after"
+
+        def lookups(self, request, model_admin):
+            return (
+                ("1d", "Last 24 hours"),
+                ("7d", "Last 7 days"),
+                ("30d", "Last 30 days"),
+                ("90d", "Last 90 days"),
+            )
+
+        def queryset(self, request, queryset):
+            if self.value():
+                days = int(self.value().rstrip("d"))
+                date_threshold = datetime.now() - timedelta(days=days)
+                return queryset.filter(date_joined__gte=date_threshold)
+            return queryset
+
+    class HasGoogleAuthFilter(admin.SimpleListFilter):
+        title = "Has Google Auth"
+        parameter_name = "has_google_auth"
+
+        def lookups(self, request, model_admin):
+            return (("True", "True"), ("False", "False"))
+
+        def queryset(self, request, queryset):
+            if self.value() == "True":
+                return queryset.filter(googleuser__isnull=False)
+            if self.value() == "False":
+                return queryset.filter(googleuser__isnull=True)
+
     list_display = (
         "id",
         "email",
@@ -77,6 +126,12 @@ class KhojUserAdmin(UserAdmin):
     )
     search_fields = ("email", "username", "phone_number", "uuid")
     filter_horizontal = ("groups", "user_permissions")
+
+    list_filter = (
+        HasGoogleAuthFilter,
+        DateJoinedAfterFilter,
+        "verified_email",
+    ) + UserAdmin.list_filter
 
     fieldsets = (
         (
@@ -92,37 +147,39 @@ class KhojUserAdmin(UserAdmin):
             if user.email:
                 host = request.get_host()
                 unique_id = user.email_verification_code
-                login_url = f"{host}/auth/magic?code={unique_id}"
+                login_url = f"{host}/auth/magic?code={unique_id}&email={user.email}"
                 messages.info(request, f"Email login URL for {user.email}: {login_url}")
 
     get_email_login_url.short_description = "Get email login URL"  # type: ignore
 
 
+admin.site.unregister(Group)
 admin.site.register(KhojUser, KhojUserAdmin)
 
-admin.site.register(ProcessLock)
-admin.site.register(SpeechToTextModelOptions)
-admin.site.register(ReflectiveQuestion)
-admin.site.register(ClientApplication)
-admin.site.register(GithubConfig)
-admin.site.register(NotionConfig)
-admin.site.register(UserVoiceModelConfig)
-admin.site.register(VoiceModelOption)
-admin.site.register(UserRequests)
+admin.site.register(ProcessLock, unfold_admin.ModelAdmin)
+admin.site.register(SpeechToTextModelOptions, unfold_admin.ModelAdmin)
+admin.site.register(ReflectiveQuestion, unfold_admin.ModelAdmin)
+admin.site.register(ClientApplication, unfold_admin.ModelAdmin)
+admin.site.register(GithubConfig, unfold_admin.ModelAdmin)
+admin.site.register(NotionConfig, unfold_admin.ModelAdmin)
+admin.site.register(UserVoiceModelConfig, unfold_admin.ModelAdmin)
+admin.site.register(VoiceModelOption, unfold_admin.ModelAdmin)
+admin.site.register(UserRequests, unfold_admin.ModelAdmin)
 
 
 @admin.register(Agent)
-class AgentAdmin(admin.ModelAdmin):
+class AgentAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "name",
     )
     search_fields = ("id", "name")
+    list_filter = ("privacy_level",)
     ordering = ("-created_at",)
 
 
 @admin.register(Entry)
-class EntryAdmin(admin.ModelAdmin):
+class EntryAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "created_at",
@@ -144,7 +201,7 @@ class EntryAdmin(admin.ModelAdmin):
 
 
 @admin.register(Subscription)
-class KhojUserSubscription(admin.ModelAdmin):
+class KhojUserSubscription(unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "user",
@@ -155,19 +212,19 @@ class KhojUserSubscription(admin.ModelAdmin):
     list_filter = ("type",)
 
 
-@admin.register(ChatModelOptions)
-class ChatModelOptionsAdmin(admin.ModelAdmin):
+@admin.register(ChatModel)
+class ChatModelAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "id",
-        "chat_model",
-        "model_type",
+        "name",
+        "ai_model_api",
         "max_prompt_size",
     )
-    search_fields = ("id", "chat_model", "model_type")
+    search_fields = ("id", "name", "ai_model_api__name")
 
 
 @admin.register(TextToImageModelConfig)
-class TextToImageModelOptionsAdmin(admin.ModelAdmin):
+class TextToImageModelOptionsAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "model_name",
@@ -176,8 +233,8 @@ class TextToImageModelOptionsAdmin(admin.ModelAdmin):
     search_fields = ("id", "model_name", "model_type")
 
 
-@admin.register(OpenAIProcessorConversationConfig)
-class OpenAIProcessorConversationConfigAdmin(admin.ModelAdmin):
+@admin.register(AiModelApi)
+class AiModelApiAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "name",
@@ -188,7 +245,7 @@ class OpenAIProcessorConversationConfigAdmin(admin.ModelAdmin):
 
 
 @admin.register(SearchModelConfig)
-class SearchModelConfigAdmin(admin.ModelAdmin):
+class SearchModelConfigAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "name",
@@ -199,7 +256,7 @@ class SearchModelConfigAdmin(admin.ModelAdmin):
 
 
 @admin.register(ServerChatSettings)
-class ServerChatSettingsAdmin(admin.ModelAdmin):
+class ServerChatSettingsAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "chat_default",
         "chat_advanced",
@@ -208,7 +265,7 @@ class ServerChatSettingsAdmin(admin.ModelAdmin):
 
 
 @admin.register(WebScraper)
-class WebScraperAdmin(admin.ModelAdmin):
+class WebScraperAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "priority",
         "name",
@@ -222,7 +279,7 @@ class WebScraperAdmin(admin.ModelAdmin):
 
 
 @admin.register(Conversation)
-class ConversationAdmin(admin.ModelAdmin):
+class ConversationAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "user",
@@ -231,7 +288,7 @@ class ConversationAdmin(admin.ModelAdmin):
         "client",
     )
     search_fields = ("id", "user__email", "user__username", "client__name")
-    list_filter = ("agent",)
+    list_filter = ("agent", "client", "user")
     ordering = ("-created_at",)
 
     actions = ["export_selected_objects", "export_selected_minimal_objects"]
@@ -247,17 +304,10 @@ class ConversationAdmin(admin.ModelAdmin):
             modified_log = conversation.conversation_log
             chat_log = modified_log.get("chat", [])
             for idx, log in enumerate(chat_log):
-                if (
-                    log["by"] == "khoj"
-                    and log["intent"]
-                    and log["intent"]["type"]
-                    and (
-                        log["intent"]["type"] == ImageIntentType.TEXT_TO_IMAGE.value
-                        or log["intent"]["type"] == ImageIntentType.TEXT_TO_IMAGE_V3.value
-                    )
-                ):
-                    log["message"] = "inline image redacted for space"
+                if log["by"] == "khoj" and log["images"]:
+                    log["images"] = ["inline image redacted for space"]
                     chat_log[idx] = log
+
             modified_log["chat"] = chat_log
 
             writer.writerow(
@@ -328,14 +378,14 @@ class ConversationAdmin(admin.ModelAdmin):
 
 
 @admin.register(UserConversationConfig)
-class UserConversationConfigAdmin(admin.ModelAdmin):
+class UserConversationConfigAdmin(unfold_admin.ModelAdmin):
     list_display = (
         "id",
         "get_user_email",
         "get_chat_model",
         "get_subscription_type",
     )
-    search_fields = ("id", "user__email", "setting__chat_model", "user__subscription__type")
+    search_fields = ("id", "user__email", "setting__name", "user__subscription__type")
     ordering = ("-updated_at",)
 
     def get_user_email(self, obj):
@@ -345,10 +395,10 @@ class UserConversationConfigAdmin(admin.ModelAdmin):
     get_user_email.admin_order_field = "user__email"  # type: ignore
 
     def get_chat_model(self, obj):
-        return obj.setting.chat_model if obj.setting else None
+        return obj.setting.name if obj.setting else None
 
     get_chat_model.short_description = "Chat Model"  # type: ignore
-    get_chat_model.admin_order_field = "setting__chat_model"  # type: ignore
+    get_chat_model.admin_order_field = "setting__name"  # type: ignore
 
     def get_subscription_type(self, obj):
         if hasattr(obj.user, "subscription"):

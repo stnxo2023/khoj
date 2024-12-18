@@ -1,12 +1,11 @@
-import json
 import logging
-import re
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
+import pyjson5
 from langchain.schema import ChatMessage
 
-from khoj.database.models import Agent, ChatModelOptions, KhojUser
+from khoj.database.models import Agent, ChatModel, KhojUser
 from khoj.processor.conversation import prompts
 from khoj.processor.conversation.anthropic.utils import (
     anthropic_chat_completion_with_backoff,
@@ -19,8 +18,12 @@ from khoj.processor.conversation.utils import (
     generate_chatml_messages_with_context,
     messages_to_print,
 )
-from khoj.utils.helpers import ConversationCommand, is_none_or_empty
-from khoj.utils.rawconfig import LocationData
+from khoj.utils.helpers import (
+    ConversationCommand,
+    is_none_or_empty,
+    truncate_code_context,
+)
+from khoj.utils.rawconfig import FileAttachment, LocationData
 from khoj.utils.yaml import yaml_dump
 
 logger = logging.getLogger(__name__)
@@ -52,7 +55,7 @@ def extract_questions_anthropic(
         [
             f'User: {chat["intent"]["query"]}\nAssistant: {{"queries": {chat["intent"].get("inferred-queries") or list([chat["intent"]["query"]])}}}\nA: {chat["message"]}\n\n'
             for chat in conversation_log.get("chat", [])[-4:]
-            if chat["by"] == "khoj" and "text-to-image" not in chat["intent"].get("type")
+            if chat["by"] == "khoj"
         ]
     )
 
@@ -82,7 +85,7 @@ def extract_questions_anthropic(
     prompt = construct_structured_message(
         message=prompt,
         images=query_images,
-        model_type=ChatModelOptions.ModelType.ANTHROPIC,
+        model_type=ChatModel.ModelType.ANTHROPIC,
         vision_enabled=vision_enabled,
         attached_file_context=query_files,
     )
@@ -106,7 +109,7 @@ def extract_questions_anthropic(
     # Extract, Clean Message from Claude's Response
     try:
         response = clean_json(response)
-        response = json.loads(response)
+        response = pyjson5.loads(response)
         response = [q.strip() for q in response["queries"] if q.strip()]
         if not isinstance(response, list) or not response:
             logger.error(f"Invalid response for constructing subqueries: {response}")
@@ -154,6 +157,9 @@ def converse_anthropic(
     query_images: Optional[list[str]] = None,
     vision_available: bool = False,
     query_files: str = None,
+    generated_files: List[FileAttachment] = None,
+    program_execution_context: Optional[List[str]] = None,
+    generated_asset_results: Dict[str, Dict] = {},
     tracer: dict = {},
 ):
     """
@@ -197,7 +203,9 @@ def converse_anthropic(
     if ConversationCommand.Online in conversation_commands or ConversationCommand.Webpage in conversation_commands:
         context_message += f"{prompts.online_search_conversation.format(online_results=yaml_dump(online_results))}\n\n"
     if ConversationCommand.Code in conversation_commands and not is_none_or_empty(code_results):
-        context_message += f"{prompts.code_executed_context.format(code_results=str(code_results))}\n\n"
+        context_message += (
+            f"{prompts.code_executed_context.format(code_results=truncate_code_context(code_results))}\n\n"
+        )
     context_message = context_message.strip()
 
     # Setup Prompt with Primer or Conversation History
@@ -210,8 +218,11 @@ def converse_anthropic(
         tokenizer_name=tokenizer_name,
         query_images=query_images,
         vision_enabled=vision_available,
-        model_type=ChatModelOptions.ModelType.ANTHROPIC,
+        model_type=ChatModel.ModelType.ANTHROPIC,
         query_files=query_files,
+        generated_files=generated_files,
+        generated_asset_results=generated_asset_results,
+        program_execution_context=program_execution_context,
     )
 
     messages, system_prompt = format_messages_for_anthropic(messages, system_prompt)

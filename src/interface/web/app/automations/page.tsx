@@ -165,7 +165,7 @@ const suggestedAutomationsMetadata: AutomationsData[] = [
     {
         subject: "Weekly Newsletter",
         query_to_run:
-            "Compile a message including: 1. A recap of news from last week 2. An at-home workout I can do before work 3. A quote to inspire me for the week ahead",
+            "/research Compile a message including: 1. A recap of news from last week 2. An at-home workout I can do before work 3. A quote to inspire me for the week ahead",
         schedule: "9AM every Monday",
         next: "Next run at 9AM on Monday",
         crontime: "0 9 * * 1",
@@ -185,7 +185,7 @@ const suggestedAutomationsMetadata: AutomationsData[] = [
     {
         subject: "Front Page of Hacker News",
         query_to_run:
-            "Summarize the top 5 posts from https://news.ycombinator.com/best and share them with me, including links",
+            "/research Summarize the top 5 posts from https://news.ycombinator.com/best and share them with me, including links",
         schedule: "9PM on every Wednesday",
         next: "Next run at 9PM on Wednesday",
         crontime: "0 21 * * 3",
@@ -195,7 +195,7 @@ const suggestedAutomationsMetadata: AutomationsData[] = [
     {
         subject: "Market Summary",
         query_to_run:
-            "Get the market summary for today and share it with me. Focus on tech stocks and the S&P 500.",
+            "/research Get the market summary for today and share it with me. Focus on tech stocks and the S&P 500.",
         schedule: "9AM on every weekday",
         next: "Next run at 9AM on Monday",
         crontime: "0 9 * * *",
@@ -214,7 +214,7 @@ const suggestedAutomationsMetadata: AutomationsData[] = [
     {
         subject: "Round-up of research papers about AI in healthcare",
         query_to_run:
-            "Summarize the top 3 research papers about AI in healthcare that were published in the last week. Include links to the full papers.",
+            "/research Summarize the top 3 research papers about AI in healthcare that were published in the last week. Include links to the full papers.",
         schedule: "9AM every Friday",
         next: "Next run at 9AM on Friday",
         crontime: "0 9 * * 5",
@@ -994,7 +994,7 @@ export default function Automations() {
     const [suggestedAutomations, setSuggestedAutomations] = useState<AutomationsData[]>([]);
     const [showLoginPrompt, setShowLoginPrompt] = useState(false);
     const isMobileWidth = useIsMobileWidth();
-    const ipLocationData = useIPLocationData();
+    const { locationData, locationDataError, locationDataLoading } = useIPLocationData();
 
     useEffect(() => {
         if (newAutomationData) {
@@ -1044,18 +1044,18 @@ export default function Automations() {
                                     {authenticatedData.email}
                                 </span>
                             ) : null}
-                            {ipLocationData && (
+                            {locationData && (
                                 <span className="rounded-lg text-sm border-secondary border p-1 flex items-center shadow-sm">
                                     <MapPinSimple className="h-4 w-4 mr-2 inline text-purple-500" />
-                                    {ipLocationData
-                                        ? `${ipLocationData.city}, ${ipLocationData.country}`
+                                    {locationData
+                                        ? `${locationData.city}, ${locationData.country}`
                                         : "Unknown"}
                                 </span>
                             )}
-                            {ipLocationData && (
+                            {locationData && (
                                 <span className="rounded-lg text-sm border-secondary border p-1 flex items-center shadow-sm">
                                     <Clock className="h-4 w-4 mr-2 inline text-green-500" />
-                                    {ipLocationData ? `${ipLocationData.timezone}` : "Unknown"}
+                                    {locationData ? `${locationData.timezone}` : "Unknown"}
                                 </span>
                             )}
                         </div>
@@ -1064,6 +1064,7 @@ export default function Automations() {
                         <LoginPrompt
                             loginRedirectMessage={"Create an account to make your own automation"}
                             onOpenChange={setShowLoginPrompt}
+                            isMobileWidth={isMobileWidth}
                         />
                     )}
                     <Alert className="bg-secondary border-none my-4">
@@ -1086,7 +1087,7 @@ export default function Automations() {
                                 setNewAutomationData={setNewAutomationData}
                                 authenticatedData={authenticatedData}
                                 isCreating={isCreating}
-                                ipLocationData={ipLocationData}
+                                ipLocationData={locationData}
                             />
                         ) : (
                             <Button
@@ -1103,7 +1104,7 @@ export default function Automations() {
                         <SharedAutomationCard
                             isMobileWidth={isMobileWidth}
                             authenticatedData={authenticatedData}
-                            locationData={ipLocationData}
+                            locationData={locationData}
                             isLoggedIn={authenticatedData ? true : false}
                             setShowLoginPrompt={setShowLoginPrompt}
                             setNewAutomationData={setNewAutomationData}
@@ -1125,7 +1126,7 @@ export default function Automations() {
                                             setNewAutomationData={setNewAutomationData}
                                             authenticatedData={authenticatedData}
                                             isCreating={isCreating}
-                                            ipLocationData={ipLocationData}
+                                            ipLocationData={locationData}
                                         />
                                     ) : (
                                         <Button
@@ -1147,7 +1148,7 @@ export default function Automations() {
                                     key={automation.id}
                                     authenticatedData={authenticatedData}
                                     automation={automation}
-                                    locationData={ipLocationData}
+                                    locationData={locationData}
                                     isLoggedIn={authenticatedData ? true : false}
                                     setShowLoginPrompt={setShowLoginPrompt}
                                 />
@@ -1158,7 +1159,7 @@ export default function Automations() {
                                 key={automation.id}
                                 authenticatedData={authenticatedData}
                                 automation={automation}
-                                locationData={ipLocationData}
+                                locationData={locationData}
                                 isLoggedIn={authenticatedData ? true : false}
                                 setShowLoginPrompt={setShowLoginPrompt}
                             />
@@ -1173,7 +1174,7 @@ export default function Automations() {
                                 key={automation.id}
                                 authenticatedData={authenticatedData}
                                 automation={automation}
-                                locationData={ipLocationData}
+                                locationData={locationData}
                                 isLoggedIn={authenticatedData ? true : false}
                                 setShowLoginPrompt={setShowLoginPrompt}
                                 suggestedCard={true}
