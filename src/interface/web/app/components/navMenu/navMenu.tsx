@@ -22,9 +22,11 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Moon, Sun, UserCircle, Question, GearFine, ArrowRight } from "@phosphor-icons/react";
+import { Moon, Sun, UserCircle, Question, GearFine, ArrowRight, Code } from "@phosphor-icons/react";
 import { KhojAgentLogo, KhojAutomationLogo, KhojSearchLogo } from "../logo/khojLogo";
 import { useIsMobileWidth } from "@/app/common/utils";
+import LoginPrompt from "../loginPrompt/loginPrompt";
+import { Button } from "@/components/ui/button";
 
 function SubscriptionBadge({ is_active }: { is_active: boolean }) {
     return (
@@ -37,11 +39,21 @@ function SubscriptionBadge({ is_active }: { is_active: boolean }) {
     );
 }
 
+function VersionBadge({ version }: { version: string }) {
+    return (
+        <div className="flex flex-row items-center">
+            <div className="w-3 h-3 rounded-full bg-green-500 mr-1"></div>
+            <p className="text-xs">{version}</p>
+        </div>
+    );
+}
+
 export default function NavMenu() {
     const userData = useAuthenticatedData();
     const [darkMode, setDarkMode] = useState(false);
     const [initialLoadDone, setInitialLoadDone] = useState(false);
     const isMobileWidth = useIsMobileWidth();
+    const [showLoginPrompt, setShowLoginPrompt] = useState(false);
 
     useEffect(() => {
         if (localStorage.getItem("theme") === "dark") {
@@ -78,6 +90,13 @@ export default function NavMenu() {
 
     return (
         <div className={styles.titleBar}>
+            {showLoginPrompt && (
+                <LoginPrompt
+                    onOpenChange={setShowLoginPrompt}
+                    isMobileWidth={isMobileWidth}
+                    loginRedirectMessage={"Login to your second brain"}
+                />
+            )}
             {isMobileWidth ? (
                 <DropdownMenu>
                     <DropdownMenuTrigger>
@@ -99,6 +118,9 @@ export default function NavMenu() {
                             <div className="flex flex-col">
                                 <p className="font-semibold">{userData?.email}</p>
                                 <SubscriptionBadge is_active={userData?.is_active ?? false} />
+                                {userData?.khoj_version && (
+                                    <VersionBadge version={userData?.khoj_version} />
+                                )}
                             </div>
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
@@ -143,23 +165,34 @@ export default function NavMenu() {
                                 </Link>
                             </DropdownMenuItem>
                         )}
+                        {userData && (
+                            <DropdownMenuItem>
+                                <Link href="/settings" className="no-underline w-full">
+                                    <div className="flex flex-rows">
+                                        <GearFine className="w-6 h-6" />
+                                        <p className="ml-3 font-semibold">Settings</p>
+                                    </div>
+                                </Link>
+                            </DropdownMenuItem>
+                        )}
                         <>
                             <DropdownMenuSeparator />
-                            {userData && (
-                                <DropdownMenuItem>
-                                    <Link href="/settings" className="no-underline w-full">
-                                        <div className="flex flex-rows">
-                                            <GearFine className="w-6 h-6" />
-                                            <p className="ml-3 font-semibold">Settings</p>
-                                        </div>
-                                    </Link>
-                                </DropdownMenuItem>
-                            )}
                             <DropdownMenuItem>
                                 <Link href="https://docs.khoj.dev" className="no-underline w-full">
                                     <div className="flex flex-rows">
                                         <Question className="w-6 h-6" />
                                         <p className="ml-3 font-semibold">Help</p>
+                                    </div>
+                                </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem>
+                                <Link
+                                    href="https://github.com/khoj-ai/khoj/releases"
+                                    className="no-underline w-full"
+                                >
+                                    <div className="flex flex-rows">
+                                        <Code className="w-6 h-6" />
+                                        <p className="ml-3 font-semibold">Releases</p>
                                     </div>
                                 </Link>
                             </DropdownMenuItem>
@@ -174,12 +207,16 @@ export default function NavMenu() {
                                 </DropdownMenuItem>
                             ) : (
                                 <DropdownMenuItem>
-                                    <Link href="/login" className="no-underline w-full">
-                                        <div className="flex flex-rows">
+                                    <Button
+                                        variant={"ghost"}
+                                        onClick={() => setShowLoginPrompt(true)}
+                                        className="no-underline w-full text-left p-0 content-start justify-start items-start h-fit"
+                                    >
+                                        <div className="flex flex-rows text-left content-start justify-start items-start p-0">
                                             <ArrowRight className="w-6 h-6" />
                                             <p className="ml-3 font-semibold">Login</p>
                                         </div>
-                                    </Link>
+                                    </Button>
                                 </DropdownMenuItem>
                             )}
                         </>
@@ -207,6 +244,9 @@ export default function NavMenu() {
                                 <div className="flex flex-col">
                                     <p className="font-semibold">{userData?.email}</p>
                                     <SubscriptionBadge is_active={userData?.is_active ?? false} />
+                                    {userData?.khoj_version && (
+                                        <VersionBadge version={userData?.khoj_version} />
+                                    )}
                                 </div>
                             </MenubarItem>
                             <MenubarSeparator className="dark:bg-white height-[2px] bg-black" />
@@ -251,6 +291,16 @@ export default function NavMenu() {
                                     </Link>
                                 </MenubarItem>
                             )}
+                            {userData && (
+                                <MenubarItem>
+                                    <Link href="/settings" className="no-underline w-full">
+                                        <div className="flex flex-rows">
+                                            <GearFine className="w-6 h-6" />
+                                            <p className="ml-3 font-semibold">Settings</p>
+                                        </div>
+                                    </Link>
+                                </MenubarItem>
+                            )}
                             <>
                                 <MenubarSeparator className="dark:bg-white height-[2px] bg-black" />
                                 <MenubarItem>
@@ -264,16 +314,18 @@ export default function NavMenu() {
                                         </div>
                                     </Link>
                                 </MenubarItem>
-                                {userData && (
-                                    <MenubarItem>
-                                        <Link href="/settings" className="no-underline w-full">
-                                            <div className="flex flex-rows">
-                                                <GearFine className="w-6 h-6" />
-                                                <p className="ml-3 font-semibold">Settings</p>
-                                            </div>
-                                        </Link>
-                                    </MenubarItem>
-                                )}
+
+                                <MenubarItem>
+                                    <Link
+                                        href="https://github.com/khoj-ai/khoj/releases"
+                                        className="no-underline w-full"
+                                    >
+                                        <div className="flex flex-rows">
+                                            <Code className="w-6 h-6" />
+                                            <p className="ml-3 font-semibold">Releases</p>
+                                        </div>
+                                    </Link>
+                                </MenubarItem>
                                 {userData ? (
                                     <MenubarItem>
                                         <Link href="/auth/logout" className="no-underline w-full">
@@ -285,12 +337,16 @@ export default function NavMenu() {
                                     </MenubarItem>
                                 ) : (
                                     <MenubarItem>
-                                        <Link href="/login" className="no-underline w-full">
-                                            <div className="flex flex-rows">
+                                        <Button
+                                            variant={"ghost"}
+                                            onClick={() => setShowLoginPrompt(true)}
+                                            className="no-underline w-full text-left p-0 content-start justify-start items-start h-fit"
+                                        >
+                                            <div className="flex flex-rows text-left content-start justify-start items-start p-0">
                                                 <ArrowRight className="w-6 h-6" />
                                                 <p className="ml-3 font-semibold">Login</p>
                                             </div>
-                                        </Link>
+                                        </Button>
                                     </MenubarItem>
                                 )}
                             </>

@@ -2,7 +2,8 @@
 
 import styles from "./sidePanel.module.css";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRef } from "react";
 
 import { mutate } from "swr";
 
@@ -57,12 +58,16 @@ import {
     UserCirclePlus,
     Sidebar,
     NotePencil,
+    FunnelSimple,
+    MagnifyingGlass,
 } from "@phosphor-icons/react";
 
 interface ChatHistory {
     conversation_id: string;
     slug: string;
     agent_name: string;
+    agent_icon: string;
+    agent_color: string;
     compressed: boolean;
     created: string;
     updated: string;
@@ -71,8 +76,11 @@ interface ChatHistory {
 
 import {
     DropdownMenu,
+    DropdownMenuCheckboxItem,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -96,6 +104,8 @@ import { modifyFileFilterForConversation } from "@/app/common/chatFunctions";
 import { ScrollAreaScrollbar } from "@radix-ui/react-scroll-area";
 import { KhojLogoType } from "@/app/components/logo/khojLogo";
 import NavMenu from "@/app/components/navMenu/navMenu";
+import { getIconFromIconName } from "@/app/common/iconUtils";
+import LoginPrompt from "../loginPrompt/loginPrompt";
 
 // Define a fetcher function
 const fetcher = (url: string) =>
@@ -407,6 +417,12 @@ function SessionsAndFiles(props: SessionsAndFilesProps) {
     return (
         <>
             <div>
+                {props.data && props.data.length > 5 && (
+                    <ChatSessionsModal
+                        data={props.organizedData}
+                        showSidePanel={props.setEnabled}
+                    />
+                )}
                 <ScrollArea>
                     <ScrollAreaScrollbar
                         orientation="vertical"
@@ -436,6 +452,8 @@ function SessionsAndFiles(props: SessionsAndFilesProps) {
                                                         }
                                                         slug={chatHistory.slug}
                                                         agent_name={chatHistory.agent_name}
+                                                        agent_color={chatHistory.agent_color}
+                                                        agent_icon={chatHistory.agent_icon}
                                                         showSidePanel={props.setEnabled}
                                                     />
                                                 ),
@@ -444,12 +462,6 @@ function SessionsAndFiles(props: SessionsAndFilesProps) {
                                 ))}
                     </div>
                 </ScrollArea>
-                {props.data && props.data.length > 5 && (
-                    <ChatSessionsModal
-                        data={props.organizedData}
-                        showSidePanel={props.setEnabled}
-                    />
-                )}
             </div>
             <FilesMenu
                 conversationId={props.conversationId}
@@ -615,43 +627,56 @@ export function ChatSessionActionMenu(props: ChatSessionActionMenuProps) {
     const size = sizeClass();
 
     return (
-        <DropdownMenu onOpenChange={(open) => setIsOpen(open)} open={isOpen}>
-            <DropdownMenuTrigger>
-                <DotsThreeVertical className={`${size}`} />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-                <DropdownMenuItem>
-                    <Button
-                        className="p-0 text-sm h-auto"
-                        variant={"ghost"}
-                        onClick={() => setIsRenaming(true)}
-                    >
-                        <Pencil className={`mr-2 ${size}`} />
-                        Rename
-                    </Button>
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                    <Button
-                        className="p-0 text-sm h-auto"
-                        variant={"ghost"}
-                        onClick={() => setIsSharing(true)}
-                    >
-                        <Share className={`mr-2 ${size}`} />
-                        Share
-                    </Button>
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                    <Button
-                        className="p-0 text-sm h-auto text-rose-300 hover:text-rose-400"
-                        variant={"ghost"}
-                        onClick={() => setIsDeleting(true)}
-                    >
-                        <Trash className={`mr-2 ${size}`} />
-                        Delete
-                    </Button>
-                </DropdownMenuItem>
-            </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="flex items-center gap-2">
+            {(props.sizing === "lg" || props.sizing === "md") && (
+                <Button
+                    className="p-0 text-sm h-auto"
+                    variant={"ghost"}
+                    onClick={() => setIsSharing(true)}
+                >
+                    <Share className={`${size}`} />
+                </Button>
+            )}
+            <DropdownMenu onOpenChange={(open) => setIsOpen(open)} open={isOpen}>
+                <DropdownMenuTrigger>
+                    <DotsThreeVertical className={`${size}`} />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                    <DropdownMenuItem>
+                        <Button
+                            className="p-0 text-sm h-auto"
+                            variant={"ghost"}
+                            onClick={() => setIsRenaming(true)}
+                        >
+                            <Pencil className={`mr-2 ${size}`} />
+                            Rename
+                        </Button>
+                    </DropdownMenuItem>
+                    {props.sizing === "sm" && (
+                        <DropdownMenuItem>
+                            <Button
+                                className="p-0 text-sm h-auto"
+                                variant={"ghost"}
+                                onClick={() => setIsSharing(true)}
+                            >
+                                <Share className={`mr-2 ${size}`} />
+                                Share
+                            </Button>
+                        </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem>
+                        <Button
+                            className="p-0 text-sm h-auto text-rose-300 hover:text-rose-400"
+                            variant={"ghost"}
+                            onClick={() => setIsDeleting(true)}
+                        >
+                            <Trash className={`mr-2 ${size}`} />
+                            Delete
+                        </Button>
+                    </DropdownMenuItem>
+                </DropdownMenuContent>
+            </DropdownMenu>
+        </div>
     );
 }
 
@@ -673,7 +698,11 @@ function ChatSession(props: ChatHistory) {
             >
                 <p className={styles.session}>{title}</p>
             </Link>
-            <ChatSessionActionMenu conversationId={props.conversation_id} setTitle={setTitle} />
+            <ChatSessionActionMenu
+                conversationId={props.conversation_id}
+                setTitle={setTitle}
+                sizing="sm"
+            />
         </div>
     );
 }
@@ -683,28 +712,149 @@ interface ChatSessionsModalProps {
     showSidePanel: (isEnabled: boolean) => void;
 }
 
+interface AgentStyle {
+    color: string;
+    icon: string;
+}
+
 function ChatSessionsModal({ data, showSidePanel }: ChatSessionsModalProps) {
+    const [agentsFilter, setAgentsFilter] = useState<string[]>([]);
+    const [agentOptions, setAgentOptions] = useState<string[]>([]);
+    const [searchQuery, setSearchQuery] = useState<string>("");
+
+    const [agentNameToStyleMap, setAgentNameToStyleMap] = useState<Record<string, AgentStyle>>({});
+
+    useEffect(() => {
+        if (data) {
+            const agents: string[] = [];
+            let agentNameToStyleMapLocal: Record<string, AgentStyle> = {};
+            Object.keys(data).forEach((timeGrouping) => {
+                data[timeGrouping].forEach((chatHistory) => {
+                    if (!agents.includes(chatHistory.agent_name) && chatHistory.agent_name) {
+                        agents.push(chatHistory.agent_name);
+
+                        agentNameToStyleMapLocal = {
+                            ...agentNameToStyleMapLocal,
+                            [chatHistory.agent_name]: {
+                                color: chatHistory.agent_color,
+                                icon: chatHistory.agent_icon,
+                            },
+                        };
+                    }
+                });
+            });
+            setAgentNameToStyleMap(agentNameToStyleMapLocal);
+            setAgentOptions(agents);
+        }
+    }, [data]);
+
+    // Memoize the filtered results
+    const filteredData = useMemo(() => {
+        if (!data) return null;
+
+        // Early return if no filters active
+        if (agentsFilter.length === 0 && searchQuery.length === 0) {
+            return data;
+        }
+
+        const filtered: GroupedChatHistory = {};
+        const agentSet = new Set(agentsFilter);
+        const searchLower = searchQuery.toLowerCase();
+
+        for (const timeGrouping in data) {
+            const matches = data[timeGrouping].filter((chatHistory) => {
+                // Early return for agent filter
+                if (agentsFilter.length > 0 && !agentSet.has(chatHistory.agent_name)) {
+                    return false;
+                }
+
+                // Early return for search query
+                if (searchQuery && !chatHistory.slug?.toLowerCase().includes(searchLower)) {
+                    return false;
+                }
+
+                return true;
+            });
+
+            if (matches.length > 0) {
+                filtered[timeGrouping] = matches;
+            }
+        }
+
+        return filtered;
+    }, [data, agentsFilter, searchQuery]);
+
     return (
         <Dialog>
-            <DialogTrigger className="flex text-left text-medium text-gray-500 hover:text-gray-300 cursor-pointer my-4 text-sm p-[0.5rem]">
-                <span className="mr-2">
-                    See All <ArrowRight className="inline h-4 w-4" weight="bold" />
+            <DialogTrigger className="flex text-left text-medium text-gray-500 hover:text-gray-300 cursor-pointer my-1 text-sm p-[0.1rem]">
+                <span className="flex items-center gap-1">
+                    <MagnifyingGlass className="inline h-4 w-4 mr-1" weight="bold" /> Find
+                    Conversation
                 </span>
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>All Conversations</DialogTitle>
                     <DialogDescription className="p-0">
+                        <div className="flex flex-row justify-between mt-2 gap-2">
+                            <Input
+                                value={searchQuery}
+                                onChange={(e) => {
+                                    setSearchQuery(e.target.value);
+                                }}
+                                placeholder="Search conversations"
+                            />
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button
+                                        variant="ghost"
+                                        className={`p-0 px-1 ${agentsFilter.length > 0 ? "bg-muted text-muted-foreground" : "bg-inherit"} `}
+                                    >
+                                        <FunnelSimple />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent>
+                                    {/* <ScrollArea className="h-[200px]"> */}
+                                    <DropdownMenuLabel>Agents</DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
+                                    {agentOptions.map((agent) => (
+                                        <DropdownMenuCheckboxItem
+                                            key={agent}
+                                            onSelect={(e) => e.preventDefault()}
+                                            checked={agentsFilter.includes(agent)}
+                                            onCheckedChange={(checked) => {
+                                                if (checked) {
+                                                    setAgentsFilter([...agentsFilter, agent]);
+                                                } else {
+                                                    setAgentsFilter(
+                                                        agentsFilter.filter((a) => a !== agent),
+                                                    );
+                                                }
+                                            }}
+                                        >
+                                            <div className="flex items-center justify-center px-1">
+                                                {getIconFromIconName(
+                                                    agentNameToStyleMap[agent]?.icon,
+                                                    agentNameToStyleMap[agent]?.color,
+                                                )}
+                                                <div className="break-words">{agent}</div>
+                                            </div>
+                                        </DropdownMenuCheckboxItem>
+                                    ))}
+                                    {/* </ScrollArea> */}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        </div>
                         <ScrollArea className="h-[500px] py-4">
-                            {data &&
-                                Object.keys(data).map((timeGrouping) => (
+                            {filteredData &&
+                                Object.keys(filteredData).map((timeGrouping) => (
                                     <div key={timeGrouping}>
                                         <div
                                             className={`text-muted-foreground text-sm font-bold p-[0.5rem] `}
                                         >
                                             {timeGrouping}
                                         </div>
-                                        {data[timeGrouping].map((chatHistory) => (
+                                        {filteredData[timeGrouping].map((chatHistory) => (
                                             <ChatSession
                                                 updated={chatHistory.updated}
                                                 created={chatHistory.created}
@@ -713,6 +863,8 @@ function ChatSessionsModal({ data, showSidePanel }: ChatSessionsModalProps) {
                                                 conversation_id={chatHistory.conversation_id}
                                                 slug={chatHistory.slug}
                                                 agent_name={chatHistory.agent_name}
+                                                agent_color={chatHistory.agent_color}
+                                                agent_icon={chatHistory.agent_icon}
                                                 showSidePanel={showSidePanel}
                                             />
                                         ))}
@@ -757,6 +909,7 @@ export default function SidePanel(props: SidePanelProps) {
     const [organizedData, setOrganizedData] = useState<GroupedChatHistory | null>(null);
     const [subsetOrganizedData, setSubsetOrganizedData] = useState<GroupedChatHistory | null>(null);
     const [enabled, setEnabled] = useState(false);
+    const [showLoginPrompt, setShowLoginPrompt] = useState(false);
 
     const authenticatedData = useAuthenticatedData();
     const { data: chatSessions } = useChatSessionsFetchRequest(
@@ -804,6 +957,13 @@ export default function SidePanel(props: SidePanelProps) {
         <div
             className={`${styles.panel} ${enabled ? styles.expanded : styles.collapsed} ${props.isMobileWidth ? "mt-0" : "mt-1"}`}
         >
+            {showLoginPrompt && (
+                <LoginPrompt
+                    loginRedirectMessage="Sign in to start chatting"
+                    onOpenChange={setShowLoginPrompt}
+                    isMobileWidth={props.isMobileWidth}
+                />
+            )}
             <div className={`flex justify-between flex-row`}>
                 {props.isMobileWidth ? (
                     <Drawer
@@ -814,7 +974,7 @@ export default function SidePanel(props: SidePanelProps) {
                         }}
                     >
                         <DrawerTrigger>
-                            <Sidebar className="h-8 w-8 mx-2" weight="thin" />
+                            <Sidebar className="h-6 w-6 mx-2" weight="thin" />
                         </DrawerTrigger>
                         <DrawerContent>
                             <DrawerHeader>
@@ -839,17 +999,15 @@ export default function SidePanel(props: SidePanelProps) {
                                 </div>
                             ) : (
                                 <div className={`${styles.panelWrapper}`}>
-                                    <Link
-                                        href={`/login?next=${encodeURIComponent(window.location.pathname)}`}
-                                        className="text-center"
+                                    {" "}
+                                    {/* Redirect to login page */}
+                                    <Button
+                                        variant="default"
+                                        onClick={() => setShowLoginPrompt(true)}
                                     >
-                                        {" "}
-                                        {/* Redirect to login page */}
-                                        <Button variant="default">
-                                            <UserCirclePlus className="h-4 w-4 mr-1" />
-                                            Sign Up
-                                        </Button>
-                                    </Link>
+                                        <UserCirclePlus className="h-4 w-4 mr-1" />
+                                        Sign Up
+                                    </Button>
                                 </div>
                             )}
                             <DrawerFooter>
@@ -886,7 +1044,7 @@ export default function SidePanel(props: SidePanelProps) {
                     </div>
                 )}
                 {props.isMobileWidth && (
-                    <Link href="/" className="content-center">
+                    <Link href="/" className="content-center h-fit self-center">
                         <KhojLogoType />
                     </Link>
                 )}
@@ -917,15 +1075,11 @@ export default function SidePanel(props: SidePanelProps) {
                             <StackPlus className="h-4 w-4 mr-1" />
                             New Conversation
                         </Button>
-                    </Link>
-                    <Link href={`/login?next=${encodeURIComponent(window.location.pathname)}`}>
-                        {" "}
-                        {/* Redirect to login page */}
-                        <Button variant="default">
-                            <UserCirclePlus className="h-4 w-4 mr-1" />
-                            Sign Up
-                        </Button>
-                    </Link>
+                    </Link>{" "}
+                    <Button variant="default" onClick={() => setShowLoginPrompt(true)}>
+                        <UserCirclePlus className="h-4 w-4 mr-1" />
+                        Sign Up
+                    </Button>
                 </div>
             )}
         </div>

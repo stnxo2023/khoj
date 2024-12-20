@@ -1,5 +1,6 @@
 from __future__ import annotations  # to avoid quoting type hints
 
+import copy
 import datetime
 import io
 import ipaddress
@@ -18,7 +19,7 @@ from itertools import islice
 from os import path
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 from urllib.parse import urlparse
 
 import psutil
@@ -255,9 +256,9 @@ def get_server_id():
 
 
 def telemetry_disabled(app_config: AppConfig, telemetry_disable_env) -> bool:
-    return (
-        not app_config.should_log_telemetry if app_config and app_config.should_log_telemetry else telemetry_disable_env
-    )
+    if telemetry_disable_env is True:
+        return True
+    return not app_config or not app_config.should_log_telemetry
 
 
 def log_telemetry(
@@ -365,7 +366,7 @@ tool_descriptions_for_llm = {
     ConversationCommand.Notes: "To search the user's personal knowledge base. Especially helpful if the question expects context from the user's notes or documents.",
     ConversationCommand.Online: "To search for the latest, up-to-date information from the internet. Note: **Questions about Khoj should always use this data source**",
     ConversationCommand.Webpage: "To use if the user has directly provided the webpage urls or you are certain of the webpage urls to read.",
-    ConversationCommand.Code: "To run Python code in a Pyodide sandbox with no network access. Helpful when need to parse information, run complex calculations, create plaintext documents, and create charts with quantitative data. Matplotlib, bs4, pandas, numpy, etc. are available.",
+    ConversationCommand.Code: "To run Python code in a Pyodide sandbox with no network access. Helpful when need to parse complex information, run complex calculations, create plaintext documents, and create charts with quantitative data. Only matplotlib, panda, numpy, scipy, bs4 and sympy external packages are available.",
     ConversationCommand.Summarize: "To retrieve an answer that depends on the entire document or a large text.",
 }
 
@@ -373,7 +374,7 @@ function_calling_description_for_llm = {
     ConversationCommand.Notes: "To search the user's personal knowledge base. Especially helpful if the question expects context from the user's notes or documents.",
     ConversationCommand.Online: "To search the internet for information. Useful to get a quick, broad overview from the internet. Provide all relevant context to ensure new searches, not in previous iterations, are performed.",
     ConversationCommand.Webpage: "To extract information from webpages. Useful for more detailed research from the internet. Usually used when you know the webpage links to refer to. Share the webpage links and information to extract in your query.",
-    ConversationCommand.Code: "To run Python code in a Pyodide sandbox with no network access. Helpful when need to parse information, run complex calculations, create plaintext documents, and create charts with quantitative data. Matplotlib, bs4, pandas, numpy, etc. are available.",
+    ConversationCommand.Code: "To run Python code in a Pyodide sandbox with no network access. Helpful when need to parse complex information, run complex calculations, create plaintext documents, and create charts with quantitative data. Only matplotlib, panda, numpy, scipy, bs4 and sympy external packages are available.",
 }
 
 mode_descriptions_for_llm = {
@@ -451,6 +452,12 @@ def in_debug_mode():
     return is_env_var_true("KHOJ_DEBUG")
 
 
+def is_promptrace_enabled():
+    """Check if Khoj is running with prompt tracing enabled.
+    Set PROMPTRACE_DIR environment variable to prompt tracing path to enable it."""
+    return not is_none_or_empty(os.getenv("PROMPTRACE_DIR"))
+
+
 def is_valid_url(url: str) -> bool:
     """Check if a string is a valid URL"""
     try:
@@ -521,6 +528,29 @@ def convert_image_to_webp(image_bytes):
         return webp_image_bytes
 
 
+def truncate_code_context(original_code_results: dict[str, Any], max_chars=10000) -> dict[str, Any]:
+    """
+    Truncate large output files and drop image file data from code results.
+    """
+    # Create a deep copy of the code results to avoid modifying the original data
+    code_results = copy.deepcopy(original_code_results)
+    for code_result in code_results.values():
+        for idx, output_file in enumerate(code_result["results"]["output_files"]):
+            # Drop image files from code results
+            if Path(output_file["filename"]).suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+                code_result["results"]["output_files"][idx] = {
+                    "filename": output_file["filename"],
+                    "b64_data": "[placeholder for generated image data for brevity]",
+                }
+            # Truncate large output files
+            elif len(output_file["b64_data"]) > max_chars:
+                code_result["results"]["output_files"][idx] = {
+                    "filename": output_file["filename"],
+                    "b64_data": output_file["b64_data"][:max_chars] + "...",
+                }
+    return code_results
+
+
 @lru_cache
 def tz_to_cc_map() -> dict[str, str]:
     """Create a mapping of timezone to country code"""
@@ -554,13 +584,15 @@ def get_cost_of_chat_message(model_name: str, input_tokens: int = 0, output_toke
     return input_cost + output_cost + prev_cost
 
 
-def get_chat_usage_metrics(model_name: str, input_tokens: int = 0, output_tokens: int = 0, usage: dict = {}):
+def get_chat_usage_metrics(
+    model_name: str, input_tokens: int = 0, output_tokens: int = 0, usage: dict = {}, cost: float = None
+):
     """
-    Get usage metrics for chat message based on input and output tokens
+    Get usage metrics for chat message based on input and output tokens and cost
     """
     prev_usage = usage or {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
     return {
         "input_tokens": prev_usage["input_tokens"] + input_tokens,
         "output_tokens": prev_usage["output_tokens"] + output_tokens,
-        "cost": get_cost_of_chat_message(model_name, input_tokens, output_tokens, prev_cost=prev_usage["cost"]),
+        "cost": cost or get_cost_of_chat_message(model_name, input_tokens, output_tokens, prev_cost=prev_usage["cost"]),
     }
