@@ -19,8 +19,7 @@ from khoj.processor.conversation.utils import (
     ThreadedGenerator,
     commit_conversation_trace,
 )
-from khoj.utils import state
-from khoj.utils.helpers import get_chat_usage_metrics, in_debug_mode
+from khoj.utils.helpers import get_chat_usage_metrics, is_promptrace_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,13 @@ openai_clients: Dict[str, openai.OpenAI] = {}
     reraise=True,
 )
 def completion_with_backoff(
-    messages, model, temperature=0, openai_api_key=None, api_base_url=None, model_kwargs=None, tracer: dict = {}
+    messages,
+    model_name: str,
+    temperature=0,
+    openai_api_key=None,
+    api_base_url=None,
+    model_kwargs: dict = {},
+    tracer: dict = {},
 ) -> str:
     client_key = f"{openai_api_key}--{api_base_url}"
     client: openai.OpenAI | None = openai_clients.get(client_key)
@@ -53,13 +58,17 @@ def completion_with_backoff(
         openai_clients[client_key] = client
 
     formatted_messages = [{"role": message.role, "content": message.content} for message in messages]
-    stream = True
 
     # Update request parameters for compatability with o1 model series
     # Refer: https://platform.openai.com/docs/guides/reasoning/beta-limitations
-    if model.startswith("o1"):
+    stream = True
+    model_kwargs["stream_options"] = {"include_usage": True}
+    if model_name == "o1":
         temperature = 1
-        model_kwargs.pop("stop", None)
+        stream = False
+        model_kwargs.pop("stream_options", None)
+    elif model_name.startswith("o1"):
+        temperature = 1
         model_kwargs.pop("response_format", None)
 
     if os.getenv("KHOJ_LLM_SEED"):
@@ -67,12 +76,11 @@ def completion_with_backoff(
 
     chat: ChatCompletion | openai.Stream[ChatCompletionChunk] = client.chat.completions.create(
         messages=formatted_messages,  # type: ignore
-        model=model,  # type: ignore
+        model=model_name,  # type: ignore
         stream=stream,
-        stream_options={"include_usage": True} if stream else {},
         temperature=temperature,
         timeout=20,
-        **(model_kwargs or dict()),
+        **model_kwargs,
     )
 
     aggregated_response = ""
@@ -92,12 +100,13 @@ def completion_with_backoff(
     # Calculate cost of chat
     input_tokens = chunk.usage.prompt_tokens if hasattr(chunk, "usage") and chunk.usage else 0
     output_tokens = chunk.usage.completion_tokens if hasattr(chunk, "usage") and chunk.usage else 0
-    tracer["usage"] = get_chat_usage_metrics(model, input_tokens, output_tokens, tracer.get("usage"))
+    cost = chunk.usage.model_extra.get("estimated_cost") or 0  # Estimated costs returned by DeepInfra API
+    tracer["usage"] = get_chat_usage_metrics(model_name, input_tokens, output_tokens, tracer.get("usage"), cost)
 
     # Save conversation trace
-    tracer["chat_model"] = model
+    tracer["chat_model"] = model_name
     tracer["temperature"] = temperature
-    if in_debug_mode() or state.verbose > 1:
+    if is_promptrace_enabled():
         commit_conversation_trace(messages, aggregated_response, tracer)
 
     return aggregated_response
@@ -140,11 +149,11 @@ def chat_completion_with_backoff(
 def llm_thread(
     g,
     messages,
-    model_name,
+    model_name: str,
     temperature,
     openai_api_key=None,
     api_base_url=None,
-    model_kwargs=None,
+    model_kwargs: dict = {},
     tracer: dict = {},
 ):
     try:
@@ -159,13 +168,17 @@ def llm_thread(
             client = openai_clients[client_key]
 
         formatted_messages = [{"role": message.role, "content": message.content} for message in messages]
-        stream = True
 
         # Update request parameters for compatability with o1 model series
         # Refer: https://platform.openai.com/docs/guides/reasoning/beta-limitations
-        if model_name.startswith("o1"):
+        stream = True
+        model_kwargs["stream_options"] = {"include_usage": True}
+        if model_name == "o1":
             temperature = 1
-            model_kwargs.pop("stop", None)
+            stream = False
+            model_kwargs.pop("stream_options", None)
+        elif model_name.startswith("o1-"):
+            temperature = 1
             model_kwargs.pop("response_format", None)
 
         if os.getenv("KHOJ_LLM_SEED"):
@@ -175,10 +188,9 @@ def llm_thread(
             messages=formatted_messages,
             model=model_name,  # type: ignore
             stream=stream,
-            stream_options={"include_usage": True} if stream else {},
             temperature=temperature,
             timeout=20,
-            **(model_kwargs or dict()),
+            **model_kwargs,
         )
 
         aggregated_response = ""
@@ -203,12 +215,13 @@ def llm_thread(
         # Calculate cost of chat
         input_tokens = chunk.usage.prompt_tokens if hasattr(chunk, "usage") and chunk.usage else 0
         output_tokens = chunk.usage.completion_tokens if hasattr(chunk, "usage") and chunk.usage else 0
-        tracer["usage"] = get_chat_usage_metrics(model_name, input_tokens, output_tokens, tracer.get("usage"))
+        cost = chunk.usage.model_extra.get("estimated_cost") or 0  # Estimated costs returned by DeepInfra API
+        tracer["usage"] = get_chat_usage_metrics(model_name, input_tokens, output_tokens, tracer.get("usage"), cost)
 
         # Save conversation trace
         tracer["chat_model"] = model_name
         tracer["temperature"] = temperature
-        if in_debug_mode() or state.verbose > 1:
+        if is_promptrace_enabled():
             commit_conversation_trace(messages, aggregated_response, tracer)
     except Exception as e:
         logger.error(f"Error in llm_thread: {e}", exc_info=True)

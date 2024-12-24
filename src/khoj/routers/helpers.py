@@ -27,6 +27,7 @@ from typing import (
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 
 import cron_descriptor
+import pyjson5
 import pytz
 import requests
 from apscheduler.job import Job
@@ -48,6 +49,7 @@ from khoj.database.adapters import (
     ais_user_subscribed,
     create_khoj_token,
     get_khoj_tokens,
+    get_user_by_email,
     get_user_name,
     get_user_notion_config,
     get_user_subscription_state,
@@ -55,7 +57,7 @@ from khoj.database.adapters import (
 )
 from khoj.database.models import (
     Agent,
-    ChatModelOptions,
+    ChatModel,
     ClientApplication,
     Conversation,
     GithubConfig,
@@ -87,7 +89,10 @@ from khoj.processor.conversation.offline.chat_model import (
     converse_offline,
     send_message_to_model_offline,
 )
-from khoj.processor.conversation.openai.gpt import converse, send_message_to_model
+from khoj.processor.conversation.openai.gpt import (
+    converse_openai,
+    send_message_to_model,
+)
 from khoj.processor.conversation.utils import (
     ChatEvent,
     ThreadedGenerator,
@@ -129,40 +134,40 @@ def is_query_empty(query: str) -> bool:
     return is_none_or_empty(query.strip())
 
 
-def validate_conversation_config(user: KhojUser):
-    default_config = ConversationAdapters.get_default_conversation_config(user)
+def validate_chat_model(user: KhojUser):
+    default_chat_model = ConversationAdapters.get_default_chat_model(user)
 
-    if default_config is None:
+    if default_chat_model is None:
         raise HTTPException(status_code=500, detail="Contact the server administrator to add a chat model.")
 
-    if default_config.model_type == "openai" and not default_config.openai_config:
+    if default_chat_model.model_type == "openai" and not default_chat_model.ai_model_api:
         raise HTTPException(status_code=500, detail="Contact the server administrator to add a chat model.")
 
 
 async def is_ready_to_chat(user: KhojUser):
-    user_conversation_config = await ConversationAdapters.aget_user_conversation_config(user)
-    if user_conversation_config == None:
-        user_conversation_config = await ConversationAdapters.aget_default_conversation_config(user)
+    user_chat_model = await ConversationAdapters.aget_user_chat_model(user)
+    if user_chat_model == None:
+        user_chat_model = await ConversationAdapters.aget_default_chat_model(user)
 
-    if user_conversation_config and user_conversation_config.model_type == ChatModelOptions.ModelType.OFFLINE:
-        chat_model = user_conversation_config.chat_model
-        max_tokens = user_conversation_config.max_prompt_size
+    if user_chat_model and user_chat_model.model_type == ChatModel.ModelType.OFFLINE:
+        chat_model_name = user_chat_model.name
+        max_tokens = user_chat_model.max_prompt_size
         if state.offline_chat_processor_config is None:
             logger.info("Loading Offline Chat Model...")
-            state.offline_chat_processor_config = OfflineChatProcessorModel(chat_model, max_tokens)
+            state.offline_chat_processor_config = OfflineChatProcessorModel(chat_model_name, max_tokens)
         return True
 
     if (
-        user_conversation_config
+        user_chat_model
         and (
-            user_conversation_config.model_type
+            user_chat_model.model_type
             in [
-                ChatModelOptions.ModelType.OPENAI,
-                ChatModelOptions.ModelType.ANTHROPIC,
-                ChatModelOptions.ModelType.GOOGLE,
+                ChatModel.ModelType.OPENAI,
+                ChatModel.ModelType.ANTHROPIC,
+                ChatModel.ModelType.GOOGLE,
             ]
         )
-        and user_conversation_config.openai_config
+        and user_chat_model.ai_model_api
     ):
         return True
 
@@ -226,7 +231,7 @@ def get_next_url(request: Request) -> str:
     return urljoin(str(request.base_url).rstrip("/"), next_path)
 
 
-def get_conversation_command(query: str, any_references: bool = False) -> ConversationCommand:
+def get_conversation_command(query: str) -> ConversationCommand:
     if query.startswith("/notes"):
         return ConversationCommand.Notes
     elif query.startswith("/help"):
@@ -249,9 +254,6 @@ def get_conversation_command(query: str, any_references: bool = False) -> Conver
         return ConversationCommand.Code
     elif query.startswith("/research"):
         return ConversationCommand.Research
-    # If no relevant notes found for the given query
-    elif not any_references:
-        return ConversationCommand.General
     else:
         return ConversationCommand.Default
 
@@ -323,7 +325,7 @@ async def acheck_if_safe_prompt(system_prompt: str, user: KhojUser = None, lax: 
 
         response = response.strip()
         try:
-            response = json.loads(response)
+            response = clean_json(response)
             is_safe = response.get("safe", "True") == "True"
             if not is_safe:
                 reason = response.get("reason", "")
@@ -403,42 +405,39 @@ async def aget_data_sources_and_output_format(
         response = clean_json(response)
         response = json.loads(response)
 
-        selected_sources = [q.strip() for q in response.get("source", []) if q.strip()]
-        selected_output = response.get("output", "text").strip()  # Default to text output
+        chosen_sources = [s.strip() for s in response.get("source", []) if s.strip()]
+        chosen_output = response.get("output", "text").strip()  # Default to text output
 
-        if not isinstance(selected_sources, list) or not selected_sources or len(selected_sources) == 0:
+        if is_none_or_empty(chosen_sources) or not isinstance(chosen_sources, list):
             raise ValueError(
-                f"Invalid response for determining relevant tools: {selected_sources}. Raw Response: {response}"
+                f"Invalid response for determining relevant tools: {chosen_sources}. Raw Response: {response}"
             )
 
-        result: Dict = {"sources": [], "output": None if not is_task else ConversationCommand.AutomatedTask}
-        for selected_source in selected_sources:
-            # Add a double check to verify it's in the agent list, because the LLM sometimes gets confused by the tool options.
-            if (
-                selected_source in source_options.keys()
-                and isinstance(result["sources"], list)
-                and (len(agent_sources) == 0 or selected_source in agent_sources)
-            ):
-                # Check whether the tool exists as a valid ConversationCommand
-                result["sources"].append(ConversationCommand(selected_source))
+        output_mode = ConversationCommand.Text
+        # Verify selected output mode is enabled for the agent, as the LLM can sometimes get confused by the tool options.
+        if chosen_output in output_options.keys() and (len(agent_outputs) == 0 or chosen_output in agent_outputs):
+            # Ensure that the chosen output mode exists as a valid ConversationCommand
+            output_mode = ConversationCommand(chosen_output)
 
-        # Add a double check to verify it's in the agent list, because the LLM sometimes gets confused by the tool options.
-        if selected_output in output_options.keys() and (len(agent_outputs) == 0 or selected_output in agent_outputs):
-            # Check whether the tool exists as a valid ConversationCommand
-            result["output"] = ConversationCommand(selected_output)
+        data_sources = []
+        # Verify selected data sources are enabled for the agent, as the LLM can sometimes get confused by the tool options.
+        for chosen_source in chosen_sources:
+            # Ensure that the chosen data source exists as a valid ConversationCommand
+            if chosen_source in source_options.keys() and (len(agent_sources) == 0 or chosen_source in agent_sources):
+                data_sources.append(ConversationCommand(chosen_source))
 
-        if is_none_or_empty(result):
+        # Fallback to default sources if the inferred data sources are unset or invalid
+        if is_none_or_empty(data_sources):
             if len(agent_sources) == 0:
-                result = {"sources": [ConversationCommand.Default], "output": ConversationCommand.Text}
+                data_sources = [ConversationCommand.Default]
             else:
-                result = {"sources": [ConversationCommand.General], "output": ConversationCommand.Text}
+                data_sources = [ConversationCommand.General]
     except Exception as e:
         logger.error(f"Invalid response for determining relevant tools: {response}. Error: {e}", exc_info=True)
-        sources = agent_sources if len(agent_sources) > 0 else [ConversationCommand.Default]
-        output = agent_outputs[0] if len(agent_outputs) > 0 else ConversationCommand.Text
-        result = {"sources": sources, "output": output}
+        data_sources = agent_sources if len(agent_sources) > 0 else [ConversationCommand.Default]
+        output_mode = agent_outputs[0] if len(agent_outputs) > 0 else ConversationCommand.Text
 
-    return result
+    return {"sources": data_sources, "output": output_mode}
 
 
 async def infer_webpage_urls(
@@ -541,7 +540,7 @@ async def generate_online_subqueries(
     # Validate that the response is a non-empty, JSON-serializable list
     try:
         response = clean_json(response)
-        response = json.loads(response)
+        response = pyjson5.loads(response)
         response = {q.strip() for q in response["queries"] if q.strip()}
         if not isinstance(response, set) or not response or len(response) == 0:
             logger.error(f"Invalid response for constructing subqueries: {response}. Returning original query: {q}")
@@ -750,7 +749,7 @@ async def generate_excalidraw_diagram(
         )
     except Exception as e:
         logger.error(f"Error generating Excalidraw diagram for {user.email}: {e}", exc_info=True)
-        yield None, None
+        yield better_diagram_description_prompt, None
         return
 
     scratchpad = excalidraw_diagram_description.get("scratchpad")
@@ -938,120 +937,124 @@ async def send_message_to_model_wrapper(
     query_files: str = None,
     tracer: dict = {},
 ):
-    conversation_config: ChatModelOptions = await ConversationAdapters.aget_default_conversation_config(user)
-    vision_available = conversation_config.vision_enabled
+    chat_model: ChatModel = await ConversationAdapters.aget_default_chat_model(user)
+    vision_available = chat_model.vision_enabled
     if not vision_available and query_images:
-        logger.warning(f"Vision is not enabled for default model: {conversation_config.chat_model}.")
+        logger.warning(f"Vision is not enabled for default model: {chat_model.name}.")
         vision_enabled_config = await ConversationAdapters.aget_vision_enabled_config()
         if vision_enabled_config:
-            conversation_config = vision_enabled_config
+            chat_model = vision_enabled_config
             vision_available = True
     if vision_available and query_images:
-        logger.info(f"Using {conversation_config.chat_model} model to understand {len(query_images)} images.")
+        logger.info(f"Using {chat_model.name} model to understand {len(query_images)} images.")
 
     subscribed = await ais_user_subscribed(user)
-    chat_model = conversation_config.chat_model
+    chat_model_name = chat_model.name
     max_tokens = (
-        conversation_config.subscribed_max_prompt_size
-        if subscribed and conversation_config.subscribed_max_prompt_size
-        else conversation_config.max_prompt_size
+        chat_model.subscribed_max_prompt_size
+        if subscribed and chat_model.subscribed_max_prompt_size
+        else chat_model.max_prompt_size
     )
-    tokenizer = conversation_config.tokenizer
-    model_type = conversation_config.model_type
-    vision_available = conversation_config.vision_enabled
+    tokenizer = chat_model.tokenizer
+    model_type = chat_model.model_type
+    vision_available = chat_model.vision_enabled
 
-    if model_type == ChatModelOptions.ModelType.OFFLINE:
+    if model_type == ChatModel.ModelType.OFFLINE:
         if state.offline_chat_processor_config is None or state.offline_chat_processor_config.loaded_model is None:
-            state.offline_chat_processor_config = OfflineChatProcessorModel(chat_model, max_tokens)
+            state.offline_chat_processor_config = OfflineChatProcessorModel(chat_model_name, max_tokens)
 
         loaded_model = state.offline_chat_processor_config.loaded_model
         truncated_messages = generate_chatml_messages_with_context(
             user_message=query,
             context_message=context,
             system_message=system_message,
-            model_name=chat_model,
+            model_name=chat_model_name,
             loaded_model=loaded_model,
             tokenizer_name=tokenizer,
             max_prompt_size=max_tokens,
             vision_enabled=vision_available,
-            model_type=conversation_config.model_type,
+            model_type=chat_model.model_type,
             query_files=query_files,
         )
 
         return send_message_to_model_offline(
             messages=truncated_messages,
             loaded_model=loaded_model,
-            model=chat_model,
+            model_name=chat_model_name,
             max_prompt_size=max_tokens,
             streaming=False,
             response_type=response_type,
             tracer=tracer,
         )
 
-    elif model_type == ChatModelOptions.ModelType.OPENAI:
-        openai_chat_config = conversation_config.openai_config
+    elif model_type == ChatModel.ModelType.OPENAI:
+        openai_chat_config = chat_model.ai_model_api
         api_key = openai_chat_config.api_key
         api_base_url = openai_chat_config.api_base_url
         truncated_messages = generate_chatml_messages_with_context(
             user_message=query,
             context_message=context,
             system_message=system_message,
-            model_name=chat_model,
+            model_name=chat_model_name,
             max_prompt_size=max_tokens,
             tokenizer_name=tokenizer,
             vision_enabled=vision_available,
             query_images=query_images,
-            model_type=conversation_config.model_type,
+            model_type=chat_model.model_type,
             query_files=query_files,
         )
 
         return send_message_to_model(
             messages=truncated_messages,
             api_key=api_key,
-            model=chat_model,
+            model=chat_model_name,
             response_type=response_type,
             api_base_url=api_base_url,
             tracer=tracer,
         )
-    elif model_type == ChatModelOptions.ModelType.ANTHROPIC:
-        api_key = conversation_config.openai_config.api_key
+    elif model_type == ChatModel.ModelType.ANTHROPIC:
+        api_key = chat_model.ai_model_api.api_key
         truncated_messages = generate_chatml_messages_with_context(
             user_message=query,
             context_message=context,
             system_message=system_message,
-            model_name=chat_model,
+            model_name=chat_model_name,
             max_prompt_size=max_tokens,
             tokenizer_name=tokenizer,
             vision_enabled=vision_available,
             query_images=query_images,
-            model_type=conversation_config.model_type,
+            model_type=chat_model.model_type,
             query_files=query_files,
         )
 
         return anthropic_send_message_to_model(
             messages=truncated_messages,
             api_key=api_key,
-            model=chat_model,
+            model=chat_model_name,
             response_type=response_type,
             tracer=tracer,
         )
-    elif model_type == ChatModelOptions.ModelType.GOOGLE:
-        api_key = conversation_config.openai_config.api_key
+    elif model_type == ChatModel.ModelType.GOOGLE:
+        api_key = chat_model.ai_model_api.api_key
         truncated_messages = generate_chatml_messages_with_context(
             user_message=query,
             context_message=context,
             system_message=system_message,
-            model_name=chat_model,
+            model_name=chat_model_name,
             max_prompt_size=max_tokens,
             tokenizer_name=tokenizer,
             vision_enabled=vision_available,
             query_images=query_images,
-            model_type=conversation_config.model_type,
+            model_type=chat_model.model_type,
             query_files=query_files,
         )
 
         return gemini_send_message_to_model(
-            messages=truncated_messages, api_key=api_key, model=chat_model, response_type=response_type, tracer=tracer
+            messages=truncated_messages,
+            api_key=api_key,
+            model=chat_model_name,
+            response_type=response_type,
+            tracer=tracer,
         )
     else:
         raise HTTPException(status_code=500, detail="Invalid conversation config")
@@ -1065,99 +1068,99 @@ def send_message_to_model_wrapper_sync(
     query_files: str = "",
     tracer: dict = {},
 ):
-    conversation_config: ChatModelOptions = ConversationAdapters.get_default_conversation_config(user)
+    chat_model: ChatModel = ConversationAdapters.get_default_chat_model(user)
 
-    if conversation_config is None:
+    if chat_model is None:
         raise HTTPException(status_code=500, detail="Contact the server administrator to set a default chat model.")
 
-    chat_model = conversation_config.chat_model
-    max_tokens = conversation_config.max_prompt_size
-    vision_available = conversation_config.vision_enabled
+    chat_model_name = chat_model.name
+    max_tokens = chat_model.max_prompt_size
+    vision_available = chat_model.vision_enabled
 
-    if conversation_config.model_type == ChatModelOptions.ModelType.OFFLINE:
+    if chat_model.model_type == ChatModel.ModelType.OFFLINE:
         if state.offline_chat_processor_config is None or state.offline_chat_processor_config.loaded_model is None:
-            state.offline_chat_processor_config = OfflineChatProcessorModel(chat_model, max_tokens)
+            state.offline_chat_processor_config = OfflineChatProcessorModel(chat_model_name, max_tokens)
 
         loaded_model = state.offline_chat_processor_config.loaded_model
         truncated_messages = generate_chatml_messages_with_context(
             user_message=message,
             system_message=system_message,
-            model_name=chat_model,
+            model_name=chat_model_name,
             loaded_model=loaded_model,
             max_prompt_size=max_tokens,
             vision_enabled=vision_available,
-            model_type=conversation_config.model_type,
+            model_type=chat_model.model_type,
             query_files=query_files,
         )
 
         return send_message_to_model_offline(
             messages=truncated_messages,
             loaded_model=loaded_model,
-            model=chat_model,
+            model_name=chat_model_name,
             max_prompt_size=max_tokens,
             streaming=False,
             response_type=response_type,
             tracer=tracer,
         )
 
-    elif conversation_config.model_type == ChatModelOptions.ModelType.OPENAI:
-        api_key = conversation_config.openai_config.api_key
+    elif chat_model.model_type == ChatModel.ModelType.OPENAI:
+        api_key = chat_model.ai_model_api.api_key
         truncated_messages = generate_chatml_messages_with_context(
             user_message=message,
             system_message=system_message,
-            model_name=chat_model,
+            model_name=chat_model_name,
             max_prompt_size=max_tokens,
             vision_enabled=vision_available,
-            model_type=conversation_config.model_type,
+            model_type=chat_model.model_type,
             query_files=query_files,
         )
 
         openai_response = send_message_to_model(
             messages=truncated_messages,
             api_key=api_key,
-            model=chat_model,
+            model=chat_model_name,
             response_type=response_type,
             tracer=tracer,
         )
 
         return openai_response
 
-    elif conversation_config.model_type == ChatModelOptions.ModelType.ANTHROPIC:
-        api_key = conversation_config.openai_config.api_key
+    elif chat_model.model_type == ChatModel.ModelType.ANTHROPIC:
+        api_key = chat_model.ai_model_api.api_key
         truncated_messages = generate_chatml_messages_with_context(
             user_message=message,
             system_message=system_message,
-            model_name=chat_model,
+            model_name=chat_model_name,
             max_prompt_size=max_tokens,
             vision_enabled=vision_available,
-            model_type=conversation_config.model_type,
+            model_type=chat_model.model_type,
             query_files=query_files,
         )
 
         return anthropic_send_message_to_model(
             messages=truncated_messages,
             api_key=api_key,
-            model=chat_model,
+            model=chat_model_name,
             response_type=response_type,
             tracer=tracer,
         )
 
-    elif conversation_config.model_type == ChatModelOptions.ModelType.GOOGLE:
-        api_key = conversation_config.openai_config.api_key
+    elif chat_model.model_type == ChatModel.ModelType.GOOGLE:
+        api_key = chat_model.ai_model_api.api_key
         truncated_messages = generate_chatml_messages_with_context(
             user_message=message,
             system_message=system_message,
-            model_name=chat_model,
+            model_name=chat_model_name,
             max_prompt_size=max_tokens,
             vision_enabled=vision_available,
-            model_type=conversation_config.model_type,
+            model_type=chat_model.model_type,
             query_files=query_files,
         )
 
         return gemini_send_message_to_model(
             messages=truncated_messages,
             api_key=api_key,
-            model=chat_model,
+            model=chat_model_name,
             response_type=response_type,
             tracer=tracer,
         )
@@ -1184,6 +1187,11 @@ def generate_chat_response(
     train_of_thought: List[Any] = [],
     query_files: str = None,
     raw_query_files: List[FileAttachment] = None,
+    generated_images: List[str] = None,
+    raw_generated_files: List[FileAttachment] = [],
+    generated_excalidraw_diagram: str = None,
+    program_execution_context: List[str] = [],
+    generated_asset_results: Dict[str, Dict] = {},
     tracer: dict = {},
 ) -> Tuple[Union[ThreadedGenerator, Iterator[str]], Dict[str, str]]:
     # Initialize Variables
@@ -1207,6 +1215,9 @@ def generate_chat_response(
             query_images=query_images,
             train_of_thought=train_of_thought,
             raw_query_files=raw_query_files,
+            generated_images=generated_images,
+            raw_generated_files=raw_generated_files,
+            generated_excalidraw_diagram=generated_excalidraw_diagram,
             tracer=tracer,
         )
 
@@ -1217,15 +1228,15 @@ def generate_chat_response(
             online_results = {}
             code_results = {}
 
-        conversation_config = ConversationAdapters.get_valid_conversation_config(user, conversation)
-        vision_available = conversation_config.vision_enabled
+        chat_model = ConversationAdapters.get_valid_chat_model(user, conversation)
+        vision_available = chat_model.vision_enabled
         if not vision_available and query_images:
             vision_enabled_config = ConversationAdapters.get_vision_enabled_config()
             if vision_enabled_config:
-                conversation_config = vision_enabled_config
+                chat_model = vision_enabled_config
                 vision_available = True
 
-        if conversation_config.model_type == "offline":
+        if chat_model.model_type == "offline":
             loaded_model = state.offline_chat_processor_config.loaded_model
             chat_response = converse_offline(
                 user_query=query_to_run,
@@ -1235,44 +1246,49 @@ def generate_chat_response(
                 conversation_log=meta_log,
                 completion_func=partial_completion,
                 conversation_commands=conversation_commands,
-                model=conversation_config.chat_model,
-                max_prompt_size=conversation_config.max_prompt_size,
-                tokenizer_name=conversation_config.tokenizer,
+                model_name=chat_model.name,
+                max_prompt_size=chat_model.max_prompt_size,
+                tokenizer_name=chat_model.tokenizer,
                 location_data=location_data,
                 user_name=user_name,
                 agent=agent,
                 query_files=query_files,
+                generated_files=raw_generated_files,
+                generated_asset_results=generated_asset_results,
                 tracer=tracer,
             )
 
-        elif conversation_config.model_type == ChatModelOptions.ModelType.OPENAI:
-            openai_chat_config = conversation_config.openai_config
+        elif chat_model.model_type == ChatModel.ModelType.OPENAI:
+            openai_chat_config = chat_model.ai_model_api
             api_key = openai_chat_config.api_key
-            chat_model = conversation_config.chat_model
-            chat_response = converse(
+            chat_model_name = chat_model.name
+            chat_response = converse_openai(
                 compiled_references,
                 query_to_run,
                 query_images=query_images,
                 online_results=online_results,
                 code_results=code_results,
                 conversation_log=meta_log,
-                model=chat_model,
+                model=chat_model_name,
                 api_key=api_key,
                 api_base_url=openai_chat_config.api_base_url,
                 completion_func=partial_completion,
                 conversation_commands=conversation_commands,
-                max_prompt_size=conversation_config.max_prompt_size,
-                tokenizer_name=conversation_config.tokenizer,
+                max_prompt_size=chat_model.max_prompt_size,
+                tokenizer_name=chat_model.tokenizer,
                 location_data=location_data,
                 user_name=user_name,
                 agent=agent,
                 vision_available=vision_available,
                 query_files=query_files,
+                generated_files=raw_generated_files,
+                generated_asset_results=generated_asset_results,
+                program_execution_context=program_execution_context,
                 tracer=tracer,
             )
 
-        elif conversation_config.model_type == ChatModelOptions.ModelType.ANTHROPIC:
-            api_key = conversation_config.openai_config.api_key
+        elif chat_model.model_type == ChatModel.ModelType.ANTHROPIC:
+            api_key = chat_model.ai_model_api.api_key
             chat_response = converse_anthropic(
                 compiled_references,
                 query_to_run,
@@ -1280,43 +1296,49 @@ def generate_chat_response(
                 online_results=online_results,
                 code_results=code_results,
                 conversation_log=meta_log,
-                model=conversation_config.chat_model,
+                model=chat_model.name,
                 api_key=api_key,
                 completion_func=partial_completion,
                 conversation_commands=conversation_commands,
-                max_prompt_size=conversation_config.max_prompt_size,
-                tokenizer_name=conversation_config.tokenizer,
+                max_prompt_size=chat_model.max_prompt_size,
+                tokenizer_name=chat_model.tokenizer,
                 location_data=location_data,
                 user_name=user_name,
                 agent=agent,
                 vision_available=vision_available,
                 query_files=query_files,
+                generated_files=raw_generated_files,
+                generated_asset_results=generated_asset_results,
+                program_execution_context=program_execution_context,
                 tracer=tracer,
             )
-        elif conversation_config.model_type == ChatModelOptions.ModelType.GOOGLE:
-            api_key = conversation_config.openai_config.api_key
+        elif chat_model.model_type == ChatModel.ModelType.GOOGLE:
+            api_key = chat_model.ai_model_api.api_key
             chat_response = converse_gemini(
                 compiled_references,
                 query_to_run,
                 online_results,
                 code_results,
                 meta_log,
-                model=conversation_config.chat_model,
+                model=chat_model.name,
                 api_key=api_key,
                 completion_func=partial_completion,
                 conversation_commands=conversation_commands,
-                max_prompt_size=conversation_config.max_prompt_size,
-                tokenizer_name=conversation_config.tokenizer,
+                max_prompt_size=chat_model.max_prompt_size,
+                tokenizer_name=chat_model.tokenizer,
                 location_data=location_data,
                 user_name=user_name,
                 agent=agent,
                 query_images=query_images,
                 vision_available=vision_available,
                 query_files=query_files,
+                generated_files=raw_generated_files,
+                generated_asset_results=generated_asset_results,
+                program_execution_context=program_execution_context,
                 tracer=tracer,
             )
 
-        metadata.update({"chat_model": conversation_config.chat_model})
+        metadata.update({"chat_model": chat_model.name})
 
     except Exception as e:
         logger.error(e, exc_info=True)
@@ -1334,6 +1356,49 @@ class FeedbackData(BaseModel):
     uquery: str
     kquery: str
     sentiment: str
+
+
+class EmailVerificationApiRateLimiter:
+    def __init__(self, requests: int, window: int, slug: str):
+        self.requests = requests
+        self.window = window
+        self.slug = slug
+
+    def __call__(self, request: Request):
+        # Rate limiting disabled if billing is disabled
+        if state.billing_enabled is False:
+            return
+
+        # Extract the email query parameter
+        email = request.query_params.get("email")
+
+        if email:
+            logger.info(f"Email query parameter: {email}")
+
+        user: KhojUser = get_user_by_email(email)
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found.",
+            )
+
+        # Remove requests outside of the time window
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=self.window)
+        count_requests = UserRequests.objects.filter(user=user, created_at__gte=cutoff, slug=self.slug).count()
+
+        # Check if the user has exceeded the rate limit
+        if count_requests >= self.requests:
+            logger.info(
+                f"Rate limit: {count_requests}/{self.requests} requests not allowed in {self.window} seconds for email: {email}."
+            )
+            raise HTTPException(
+                status_code=429,
+                detail="Ran out of login attempts",
+            )
+
+        # Add the current request to the db
+        UserRequests.objects.create(user=user, slug=self.slug)
 
 
 class ApiUserRateLimiter:
@@ -1615,7 +1680,7 @@ def scheduled_chat(
             last_run_time = datetime.strptime(last_run_time, "%Y-%m-%d %I:%M %p %Z").replace(tzinfo=timezone.utc)
 
             # If the last run time was within the last 6 hours, don't run it again. This helps avoid multithreading issues and rate limits.
-            if (datetime.now(timezone.utc) - last_run_time).total_seconds() < 21600:
+            if (datetime.now(timezone.utc) - last_run_time).total_seconds() < 6 * 60 * 60:
                 logger.info(f"Skipping scheduled chat {job_id} as the next run time is in the future.")
                 return
 
@@ -1784,6 +1849,9 @@ class MessageProcessor:
         self.references = {}
         self.usage = {}
         self.raw_response = ""
+        self.generated_images = []
+        self.generated_files = []
+        self.generated_excalidraw_diagram = []
 
     def convert_message_chunk_to_json(self, raw_chunk: str) -> Dict[str, Any]:
         if raw_chunk.startswith("{") and raw_chunk.endswith("}"):
@@ -1822,6 +1890,16 @@ class MessageProcessor:
                     self.raw_response += chunk_data
             else:
                 self.raw_response += chunk_data
+        elif chunk_type == ChatEvent.GENERATED_ASSETS:
+            chunk_data = chunk["data"]
+            if isinstance(chunk_data, dict):
+                for key in chunk_data:
+                    if key == "images":
+                        self.generated_images = chunk_data[key]
+                    elif key == "files":
+                        self.generated_files = chunk_data[key]
+                    elif key == "excalidrawDiagram":
+                        self.generated_excalidraw_diagram = chunk_data[key]
 
     def handle_json_response(self, json_data: Dict[str, str]) -> str | Dict[str, str]:
         if "image" in json_data or "details" in json_data:
@@ -1852,7 +1930,14 @@ async def read_chat_stream(response_iterator: AsyncGenerator[str, None]) -> Dict
     if buffer:
         processor.process_message_chunk(buffer)
 
-    return {"response": processor.raw_response, "references": processor.references, "usage": processor.usage}
+    return {
+        "response": processor.raw_response,
+        "references": processor.references,
+        "usage": processor.usage,
+        "images": processor.generated_images,
+        "files": processor.generated_files,
+        "excalidrawDiagram": processor.generated_excalidraw_diagram,
+    }
 
 
 def get_user_config(user: KhojUser, request: Request, is_detailed: bool = False):
@@ -1896,13 +1981,13 @@ def get_user_config(user: KhojUser, request: Request, is_detailed: bool = False)
     current_notion_config = get_user_notion_config(user)
     notion_token = current_notion_config.token if current_notion_config else ""
 
-    selected_chat_model_config = ConversationAdapters.get_conversation_config(
+    selected_chat_model_config = ConversationAdapters.get_chat_model(
         user
-    ) or ConversationAdapters.get_default_conversation_config(user)
+    ) or ConversationAdapters.get_default_chat_model(user)
     chat_models = ConversationAdapters.get_conversation_processor_options().all()
     chat_model_options = list()
     for chat_model in chat_models:
-        chat_model_options.append({"name": chat_model.chat_model, "id": chat_model.id})
+        chat_model_options.append({"name": chat_model.name, "id": chat_model.id})
 
     selected_paint_model_config = ConversationAdapters.get_user_text_to_image_model_config(user)
     paint_model_options = ConversationAdapters.get_text_to_image_model_options().all()

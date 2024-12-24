@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import { Noto_Sans } from "next/font/google";
+import { noto_sans, noto_sans_arabic } from "@/app/fonts";
 import "../globals.css";
 import { Toaster } from "@/components/ui/toaster";
-
-const inter = Noto_Sans({ subsets: ["latin"] });
+import { ContentSecurityPolicy } from "../common/layoutHelper";
+import { ChatwootWidget } from "../components/chatWoot/ChatwootWidget";
 
 export const metadata: Metadata = {
     title: "Khoj AI - Settings",
@@ -15,10 +15,15 @@ export const metadata: Metadata = {
     openGraph: {
         siteName: "Khoj AI",
         title: "Khoj AI - Settings",
-        description: "Your Second Brain.",
+        description: "Setup, configure, and personalize Khoj, your AI research assistant.",
         url: "https://app.khoj.dev/settings",
         type: "website",
         images: [
+            {
+                url: "https://assets.khoj.dev/khoj_hero.png",
+                width: 940,
+                height: 525,
+            },
             {
                 url: "https://assets.khoj.dev/khoj_lantern_256x256.png",
                 width: 256,
@@ -34,21 +39,12 @@ export default function RootLayout({
     children: React.ReactNode;
 }>) {
     return (
-        <html lang="en">
-            <meta
-                httpEquiv="Content-Security-Policy"
-                content="default-src 'self' https://assets.khoj.dev;
-                        script-src 'self' https://assets.khoj.dev 'unsafe-inline' 'unsafe-eval';
-                        connect-src 'self' https://ipapi.co/json ws://localhost:42110;
-                        style-src 'self' https://assets.khoj.dev 'unsafe-inline' https://fonts.googleapis.com;
-                        img-src 'self' data: https://*.khoj.dev https://*.googleusercontent.com;
-                        font-src 'self' https://assets.khoj.dev https://fonts.gstatic.com;
-                        child-src 'none';
-                        object-src 'none';"
-            ></meta>
-            <body className={inter.className}>
+        <html lang="en" className={`${noto_sans.variable} ${noto_sans_arabic.variable}`}>
+            <ContentSecurityPolicy />
+            <body>
                 {children}
                 <Toaster />
+                <ChatwootWidget />
             </body>
         </html>
     );

@@ -37,6 +37,9 @@ const config = {
     locales: ['en'],
   },
 
+  // Add a widget for Chatwoot for live chat if users need help
+  clientModules: [require.resolve('./src/components/ChatwootWidget.js')],
+
   presets: [
     [
       'classic',
@@ -69,7 +72,6 @@ const config = {
       }),
     ],
   ],
-
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
@@ -91,23 +93,31 @@ const config = {
         items: [
           {
             href: 'https://github.com/khoj-ai/khoj',
-            label: 'GitHub',
             position: 'right',
+            className: 'header-github-link',
+            title: 'Codebase',
+            'aria-label': 'GitHub repository',
           },
           {
             href: 'https://app.khoj.dev/login',
-            label: 'Cloud',
             position: 'right',
+            className: 'header-cloud-link',
+            title: 'Khoj Cloud',
+            'aria-label': 'Khoj Cloud',
           },
           {
             href: 'https://discord.gg/BDgyabRM6e',
-            label: 'Discord',
             position: 'right',
+            className: 'header-discord-link',
+            title: 'Community',
+            'aria-label': 'Discord community',
           },
           {
             href: 'https://blog.khoj.dev',
-            label: 'Blog',
             position: 'right',
+            className: 'header-blog-link',
+            title: 'Blog',
+            'aria-label': 'Khoj Blog',
           },
         ],
       },

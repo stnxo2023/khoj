@@ -51,6 +51,7 @@ import {
     FilePdf,
     FileMd,
     MicrosoftWordLogo,
+    Microscope,
 } from "@phosphor-icons/react";
 import { OrgMode } from "@/app/components/logo/fileLogo";
 
@@ -167,6 +168,12 @@ const iconMap: IconMap = {
     Broadcast: (color: string, width: string, height: string) => (
         <Broadcast className={`${width} ${height} ${color} mr-2`} />
     ),
+    Image: (color: string, width: string, height: string) => (
+        <Image className={`${width} ${height} ${color} mr-2`} />
+    ),
+    File: (color: string, width: string, height: string) => (
+        <File className={`${width} ${height} ${color} mr-2`} />
+    ),
 };
 
 export function getIconForSlashCommand(command: string, customClassName: string | null = null) {
@@ -217,6 +224,10 @@ export function getIconForSlashCommand(command: string, customClassName: string 
 
     if (command.includes("code")) {
         return <Code className={className} />;
+    }
+
+    if (command.includes("research")) {
+        return <Microscope className={className} />;
     }
 
     return <ArrowRight className={className} />;

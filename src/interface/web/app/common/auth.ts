@@ -9,6 +9,7 @@ export interface UserProfile {
     is_active: boolean;
     has_documents: boolean;
     detail: string;
+    khoj_version: string;
 }
 
 const fetcher = (url: string) =>
@@ -18,13 +19,15 @@ const fetcher = (url: string) =>
         .catch((err) => console.warn(err));
 
 export function useAuthenticatedData() {
-    const { data, error } = useSWR<UserProfile>("/api/v1/user", fetcher, {
+    const { data, error, isLoading } = useSWR<UserProfile>("/api/v1/user", fetcher, {
         revalidateOnFocus: false,
     });
 
-    if (error || !data || data.detail === "Forbidden") return null;
+    if (data?.detail === "Forbidden") {
+        return { data: null, error: "Forbidden", isLoading: false };
+    }
 
-    return data;
+    return { data, error, isLoading };
 }
 
 export interface ModelOptions {

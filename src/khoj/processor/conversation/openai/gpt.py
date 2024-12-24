@@ -1,11 +1,11 @@
-import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
+import pyjson5
 from langchain.schema import ChatMessage
 
-from khoj.database.models import Agent, ChatModelOptions, KhojUser
+from khoj.database.models import Agent, ChatModel, KhojUser
 from khoj.processor.conversation import prompts
 from khoj.processor.conversation.openai.utils import (
     chat_completion_with_backoff,
@@ -17,8 +17,12 @@ from khoj.processor.conversation.utils import (
     generate_chatml_messages_with_context,
     messages_to_print,
 )
-from khoj.utils.helpers import ConversationCommand, is_none_or_empty
-from khoj.utils.rawconfig import LocationData
+from khoj.utils.helpers import (
+    ConversationCommand,
+    is_none_or_empty,
+    truncate_code_context,
+)
+from khoj.utils.rawconfig import FileAttachment, LocationData
 from khoj.utils.yaml import yaml_dump
 
 logger = logging.getLogger(__name__)
@@ -79,7 +83,7 @@ def extract_questions(
     prompt = construct_structured_message(
         message=prompt,
         images=query_images,
-        model_type=ChatModelOptions.ModelType.OPENAI,
+        model_type=ChatModel.ModelType.OPENAI,
         vision_enabled=vision_enabled,
         attached_file_context=query_files,
     )
@@ -100,7 +104,7 @@ def extract_questions(
     # Extract, Clean Message from GPT's Response
     try:
         response = clean_json(response)
-        response = json.loads(response)
+        response = pyjson5.loads(response)
         response = [q.strip() for q in response["queries"] if q.strip()]
         if not isinstance(response, list) or not response:
             logger.error(f"Invalid response for constructing subqueries: {response}")
@@ -124,7 +128,7 @@ def send_message_to_model(
     # Get Response from GPT
     return completion_with_backoff(
         messages=messages,
-        model=model,
+        model_name=model,
         openai_api_key=api_key,
         temperature=temperature,
         api_base_url=api_base_url,
@@ -133,7 +137,7 @@ def send_message_to_model(
     )
 
 
-def converse(
+def converse_openai(
     references,
     user_query,
     online_results: Optional[Dict[str, Dict]] = None,
@@ -153,6 +157,9 @@ def converse(
     query_images: Optional[list[str]] = None,
     vision_available: bool = False,
     query_files: str = None,
+    generated_files: List[FileAttachment] = None,
+    generated_asset_results: Dict[str, Dict] = {},
+    program_execution_context: List[str] = None,
     tracer: dict = {},
 ):
     """
@@ -196,7 +203,10 @@ def converse(
     if not is_none_or_empty(online_results):
         context_message += f"{prompts.online_search_conversation.format(online_results=yaml_dump(online_results))}\n\n"
     if not is_none_or_empty(code_results):
-        context_message += f"{prompts.code_executed_context.format(code_results=str(code_results))}\n\n"
+        context_message += (
+            f"{prompts.code_executed_context.format(code_results=truncate_code_context(code_results))}\n\n"
+        )
+
     context_message = context_message.strip()
 
     # Setup Prompt with Primer or Conversation History
@@ -210,8 +220,11 @@ def converse(
         tokenizer_name=tokenizer_name,
         query_images=query_images,
         vision_enabled=vision_available,
-        model_type=ChatModelOptions.ModelType.OPENAI,
+        model_type=ChatModel.ModelType.OPENAI,
         query_files=query_files,
+        generated_files=generated_files,
+        generated_asset_results=generated_asset_results,
+        program_execution_context=program_execution_context,
     )
     logger.debug(f"Conversation Context for GPT: {messages_to_print(messages)}")
 
