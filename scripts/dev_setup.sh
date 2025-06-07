@@ -2,7 +2,7 @@
 # ---
 PROJECT_ROOT=$(git rev-parse --show-toplevel)
 
-# Default is a minimal, local installation unless config flags are set.
+# Default to minimal installation unless --full flag passed
 INSTALL_FULL=false
 DEVCONTAINER=false
 for arg in "$@"
@@ -17,18 +17,34 @@ do
     fi
 done
 
-# Install Server App
-# ---
-echo "Installing Server App..."
-cd $PROJECT_ROOT
-# pip install --user pipenv && pipenv install -e '.[dev]' --skip-lock && pipenv shell
-python3 -m venv .venv && . .venv/bin/activate && python3 -m pip install -e '.[dev]'
+if [ "$DEVCONTAINER" = true ]; then
+    echo "Dev container setup - using pre-installed dependencies..."
+    cd "$PROJECT_ROOT"
 
-# Install Web App
-# ---
-echo "Installing Web App..."
-cd $PROJECT_ROOT/src/interface/web
-yarn install
+    # Use devcontainer launch.json
+    mkdir -p .vscode && cp .devcontainer/launch.json .vscode/launch.json
+
+    # Activate the pre-installed venv (no need to create new one)
+    echo "Using Python environment at /opt/venv"
+    # PATH should already include /opt/venv/bin from Dockerfile
+
+    # Install khoj in editable mode (dependencies already installed)
+    python3 -m pip install -e '.[dev]'
+
+    # Install Web App using cached dependencies
+    echo "Installing Web App using cached dependencies..."
+    cd "$PROJECT_ROOT/src/interface/web"
+    yarn install --cache-folder /opt/yarn-cache && yarn export
+else
+    # Standard setup
+    echo "Installing Server App..."
+    cd "$PROJECT_ROOT"
+    python3 -m venv .venv && . .venv/bin/activate && python3 -m pip install -e '.[dev]'
+
+    echo "Installing Web App..."
+    cd "$PROJECT_ROOT/src/interface/web"
+    yarn install && yarn export
+fi
 
 # Install Obsidian App
 # ---
@@ -44,74 +60,6 @@ if [ "$INSTALL_FULL" = true ] ; then
     echo "Installing Desktop App..."
     cd $PROJECT_ROOT/src/interface/desktop
     yarn install
-fi
-
-# Create .vscode/launch.json if it doesn't exist
-# ---
-VSCODE_DIR="$PROJECT_ROOT/.vscode"
-LAUNCH_JSON_PATH="$VSCODE_DIR/launch.json"
-
-# Overwrite project vscode launch.json in devcontainer
-# ---
-# Differs from default launch.json with sudo true.
-# Required by pgserver in github codespaces, not in local dev.
-mkdir -p "$VSCODE_DIR"
-if [ "$DEVCONTAINER" = true ]; then
-  echo "Creating $LAUNCH_JSON_PATH..."
-  cat << EOF > "$LAUNCH_JSON_PATH"
-{
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "Launch Khoj",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.khoj.main",
-            "justMyCode": false,
-            "console": "integratedTerminal",
-            "sudo": true,
-            "args": [
-                "-v",
-                "--anonymous-mode",
-                "--non-interactive",
-                "--port=42110",
-            ],
-            // You can load environment variables via a .env file, the env field below or Github Codespace secrets.
-            "envFile": "\${workspaceFolder}/.env",
-            "env": {
-                "KHOJ_ADMIN_EMAIL": "admin",
-                "KHOJ_ADMIN_PASSWORD": "admin",
-                "USE_EMBEDDED_DB": "True",
-                "KHOJ_DEBUG": "True",
-                "KHOJ_TELEMETRY_DISABLE": "True",
-                // Set LLM Provider API keys
-                // ---
-                // "GEMINI_API_KEY": "",
-                // "ANTHROPIC_API_KEY": "",
-                // "OPENAI_API_KEY": "",
-                // "OPENAI_BASE_URL": "http://localhost:11434/v1/",
-                // "KHOJ_DEFAULT_CHAT_MODEL": "claude-sonnet-4-0",
-                // Set Search Provider API keys
-                // ---
-                // "SERPER_DEV_API_KEY": "",
-                // "OLOSTEP_API_KEY": "",
-                // "FIRECRAWL_API_KEY": "",
-                // "JINA_API_KEY": "",
-                // Enable Khoj Operator
-                // ---
-                // "KHOJ_OPERATOR_ENABLED": "True",
-                // Configure Code Sandbox
-                // ---
-                // "KHOJ_TERRARIUM_URL": "http://localhost:8080",
-                // "E2B_API_KEY": "",
-                // Enable Promptracer to debug prompt flows
-                // ---
-                // "PROMPTRACE_DIR": "\${workspaceFolder}/promptrace",
-            }
-        },
-    ]
-}
-EOF
 fi
 
 # Install pre-commit hooks

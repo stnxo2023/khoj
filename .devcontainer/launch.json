@@ -8,15 +8,12 @@
             "module": "src.khoj.main",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "sudo": false,
+            "sudo": true,
             "args": [
                 "-v",
                 "--anonymous-mode",
-                // "--non-interactive",
-                "--port=42110",
-                // "--host=example.com",
-                // "--sslcert=ssl.crt",
-                // "--sslkey=ssl.key",
+                "--non-interactive",
+                "--port=42110"
             ],
             "envFile": "${workspaceFolder}/.env",
             "env": {
@@ -25,13 +22,8 @@
                 "USE_EMBEDDED_DB": "true",
                 "KHOJ_DEBUG": "true",
                 "KHOJ_TELEMETRY_DISABLED": "true",
-                // Configure Code Sandbox
-                // "KHOJ_TERRARIUM_URL": "http://localhost:8080",
-                // Enable Promptracer to debug prompt flows
-                // "PROMPTRACE_DIR": "\${workspaceFolder}/promptrace",
-                // Enable Khoj Operator
-                // "KHOJ_OPERATOR_ENABLED": "True",
+                "PROMPTRACE_DIR": "${workspaceFolder}/promptrace"
             }
-        },
+        }
     ]
 }

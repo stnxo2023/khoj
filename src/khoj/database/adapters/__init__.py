@@ -37,6 +37,7 @@ from torch import Tensor
 from khoj.database.models import (
     Agent,
     AiModelApi,
+    ChatMessageModel,
     ChatModel,
     ClientApplication,
     Conversation,
@@ -72,6 +73,8 @@ from khoj.search_filter.word_filter import WordFilter
 from khoj.utils import state
 from khoj.utils.config import OfflineChatProcessorModel
 from khoj.utils.helpers import (
+    clean_object_for_db,
+    clean_text_for_db,
     generate_random_internal_agent_name,
     generate_random_name,
     in_debug_mode,
@@ -1032,7 +1035,7 @@ class ConversationAdapters:
             user=user, client=client_application, id=conversation_id
         ).afirst()
         if conversation:
-            conversation.title = title
+            conversation.title = clean_text_for_db(title)
             await conversation.asave()
             return conversation
         return None
@@ -1417,7 +1420,7 @@ class ConversationAdapters:
     @require_valid_user
     async def save_conversation(
         user: KhojUser,
-        conversation_log: dict,
+        chat_history: List[ChatMessageModel],
         client_application: ClientApplication = None,
         conversation_id: str = None,
         user_message: str = None,
@@ -1432,14 +1435,16 @@ class ConversationAdapters:
                 await Conversation.objects.filter(user=user, client=client_application).order_by("-updated_at").afirst()
             )
 
+        conversation_log = {"chat": [msg.model_dump() for msg in chat_history]}
+        cleaned_conversation_log = clean_object_for_db(conversation_log)
         if conversation:
-            conversation.conversation_log = conversation_log
+            conversation.conversation_log = cleaned_conversation_log
             conversation.slug = slug
             conversation.updated_at = django_timezone.now()
             await conversation.asave()
         else:
             await Conversation.objects.acreate(
-                user=user, conversation_log=conversation_log, client=client_application, slug=slug
+                user=user, conversation_log=cleaned_conversation_log, client=client_application, slug=slug
             )
 
     @staticmethod
@@ -1610,6 +1615,7 @@ class ConversationAdapters:
         conversation_log = conversation.conversation_log
         updated_log = [msg for msg in conversation_log["chat"] if msg.get("turnId") != turn_id]
         conversation.conversation_log["chat"] = updated_log
+        conversation.conversation_log = clean_object_for_db(conversation.conversation_log)
         conversation.save()
         return True
 
@@ -1617,13 +1623,15 @@ class ConversationAdapters:
 class FileObjectAdapters:
     @staticmethod
     def update_raw_text(file_object: FileObject, new_raw_text: str):
-        file_object.raw_text = new_raw_text
+        cleaned_raw_text = clean_text_for_db(new_raw_text)
+        file_object.raw_text = cleaned_raw_text
         file_object.save()
 
     @staticmethod
     @require_valid_user
     def create_file_object(user: KhojUser, file_name: str, raw_text: str):
-        return FileObject.objects.create(user=user, file_name=file_name, raw_text=raw_text)
+        cleaned_raw_text = clean_text_for_db(raw_text)
+        return FileObject.objects.create(user=user, file_name=file_name, raw_text=cleaned_raw_text)
 
     @staticmethod
     @require_valid_user
@@ -1647,13 +1655,15 @@ class FileObjectAdapters:
 
     @staticmethod
     async def aupdate_raw_text(file_object: FileObject, new_raw_text: str):
-        file_object.raw_text = new_raw_text
+        cleaned_raw_text = clean_text_for_db(new_raw_text)
+        file_object.raw_text = cleaned_raw_text
         await file_object.asave()
 
     @staticmethod
     @arequire_valid_user
     async def acreate_file_object(user: KhojUser, file_name: str, raw_text: str):
-        return await FileObject.objects.acreate(user=user, file_name=file_name, raw_text=raw_text)
+        cleaned_raw_text = clean_text_for_db(raw_text)
+        return await FileObject.objects.acreate(user=user, file_name=file_name, raw_text=cleaned_raw_text)
 
     @staticmethod
     @arequire_valid_user
@@ -1947,7 +1957,7 @@ class AutomationAdapters:
         # Perform validation checks
         # Check if user is allowed to delete this automation id
         if not automation.id.startswith(f"automation_{user.uuid}_"):
-            raise ValueError("Invalid automation id")
+            raise ValueError(f"Invalid automation id: {automation.id}")
 
         automation_metadata = json.loads(automation.name)
         crontime = automation_metadata["crontime"]
@@ -1968,7 +1978,7 @@ class AutomationAdapters:
         # Perform validation checks
         # Check if user is allowed to delete this automation id
         if not automation.id.startswith(f"automation_{user.uuid}_"):
-            raise ValueError("Invalid automation id")
+            raise ValueError(f"Invalid automation id: {automation.id}")
 
         django_job = DjangoJob.objects.filter(id=automation.id).first()
         execution = DjangoJobExecution.objects.filter(job=django_job, status="Executed")
@@ -1990,11 +2000,11 @@ class AutomationAdapters:
         # Perform validation checks
         # Check if user is allowed to retrieve this automation id
         if is_none_or_empty(automation_id) or not automation_id.startswith(f"automation_{user.uuid}_"):
-            raise ValueError("Invalid automation id")
+            raise ValueError(f"Invalid automation id: {automation_id}")
         # Check if automation with this id exist
         automation: Job = state.scheduler.get_job(job_id=automation_id)
         if not automation:
-            raise ValueError("Invalid automation id")
+            raise ValueError(f"Invalid automation id: {automation_id}")
 
         return automation
 
@@ -2003,11 +2013,11 @@ class AutomationAdapters:
         # Perform validation checks
         # Check if user is allowed to retrieve this automation id
         if is_none_or_empty(automation_id) or not automation_id.startswith(f"automation_{user.uuid}_"):
-            raise ValueError("Invalid automation id")
+            raise ValueError(f"Invalid automation id: {automation_id}")
         # Check if automation with this id exist
         automation: Job = await sync_to_async(state.scheduler.get_job)(job_id=automation_id)
         if not automation:
-            raise ValueError("Invalid automation id")
+            raise ValueError(f"Invalid automation id: {automation_id}")
 
         return automation
 
