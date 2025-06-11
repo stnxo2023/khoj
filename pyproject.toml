@@ -7,7 +7,7 @@ name = "khoj"
 description = "Your Second Brain"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
-requires-python = ">=3.10"
+requires-python = ">=3.10, <3.13"
 authors = [
     { name = "Debanjum Singh Solanky, Saba Imran" },
 ]
@@ -42,7 +42,7 @@ dependencies = [
     "fastapi >= 0.110.0",
     "python-multipart >= 0.0.7",
     "jinja2 == 3.1.6",
-    "openai >= 1.0.0",
+    "openai >= 1.86.0",
     "tiktoken >= 0.3.2",
     "tenacity >= 9.0.0",
     "magika ~= 0.5.1",
@@ -62,7 +62,7 @@ dependencies = [
     "requests >= 2.26.0",
     "anyio ~= 4.8.0",
     "pymupdf == 1.24.11",
-    "django == 5.1.9",
+    "django == 5.1.10",
     "django-unfold == 0.42.0",
     "authlib == 1.2.1",
     "llama-cpp-python == 0.2.88",
@@ -113,8 +113,6 @@ prod = [
 ]
 local = [
     "pgserver == 0.1.4",
-    "playwright >= 1.49.0",
-    "pyautogui == 0.9.54",
 ]
 dev = [
     "khoj[prod,local]",

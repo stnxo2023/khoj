@@ -338,15 +338,12 @@ class ConversationCommand(str, Enum):
     Default = "default"
     General = "general"
     Notes = "notes"
-    Help = "help"
     Online = "online"
     Webpage = "webpage"
     Code = "code"
     Image = "image"
     Text = "text"
-    Automation = "automation"
     AutomatedTask = "automated_task"
-    Summarize = "summarize"
     Diagram = "diagram"
     Research = "research"
     Operator = "operator"
@@ -360,9 +357,6 @@ command_descriptions = {
     ConversationCommand.Webpage: "Get information from webpage suggested by you.",
     ConversationCommand.Code: "Run Python code to parse information, run complex calculations, create documents and charts.",
     ConversationCommand.Image: "Generate illustrative, creative images by describing your imagination in words.",
-    ConversationCommand.Automation: "Automatically run your query at a specified time or interval.",
-    ConversationCommand.Help: "Get help with how to use or setup Khoj from the documentation",
-    ConversationCommand.Summarize: "Get help with a question pertaining to an entire document.",
     ConversationCommand.Diagram: "Draw a flowchart, diagram, or any other visual representation best expressed with primitives like lines, rectangles, and text.",
     ConversationCommand.Research: "Do deep research on a topic. This will take longer than usual, but give a more detailed, comprehensive answer.",
     ConversationCommand.Operator: "Operate and perform tasks using a computer.",
@@ -833,3 +827,26 @@ def normalize_email(email: str, check_deliverability=False) -> tuple[str, bool]:
         return valid_email.normalized, True
     except (EmailNotValidError, EmailUndeliverableError):
         return lower_email, False
+
+
+def clean_text_for_db(text):
+    """Remove characters that PostgreSQL DB cannot store in text fields.
+
+    PostgreSQL text fields cannot contain NUL (0x00) characters.
+    This is a database-level constraint.
+    """
+    if not isinstance(text, str):
+        return text
+    return text.replace("\x00", "")
+
+
+def clean_object_for_db(data):
+    """Recursively clean PostgreSQL-incompatible characters from nested data structures."""
+    if isinstance(data, str):
+        return clean_text_for_db(data)
+    elif isinstance(data, dict):
+        return {k: clean_object_for_db(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [clean_object_for_db(item) for item in data]
+    else:
+        return data

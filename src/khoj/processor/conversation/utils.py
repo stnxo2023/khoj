@@ -20,11 +20,17 @@ import yaml
 from langchain_core.messages.chat import ChatMessage
 from llama_cpp import LlamaTokenizer
 from llama_cpp.llama import Llama
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 
 from khoj.database.adapters import ConversationAdapters
-from khoj.database.models import ChatModel, ClientApplication, KhojUser
+from khoj.database.models import (
+    ChatMessageModel,
+    ChatModel,
+    ClientApplication,
+    Intent,
+    KhojUser,
+)
 from khoj.processor.conversation import prompts
 from khoj.processor.conversation.offline.utils import download_model, infer_max_tokens
 from khoj.search_filter.base_filter import BaseFilter
@@ -56,14 +62,15 @@ model_to_prompt_size = {
     "gpt-4.1": 60000,
     "gpt-4.1-mini": 120000,
     "gpt-4.1-nano": 120000,
-    "o1": 20000,
-    "o3": 30000,
-    "o1-mini": 60000,
-    "o3-mini": 60000,
-    "o4-mini": 60000,
+    "o1-mini": 90000,
+    "o1": 30000,
+    "o3-mini": 90000,
+    "o3": 60000,
+    "o3-pro": 30000,
+    "o4-mini": 90000,
     # Google Models
-    "gemini-2.5-flash-preview-04-17": 120000,
-    "gemini-2.5-pro-preview-03-25": 60000,
+    "gemini-2.5-flash-preview-05-20": 120000,
+    "gemini-2.5-pro-preview-06-05": 60000,
     "gemini-2.0-flash": 120000,
     "gemini-2.0-flash-lite": 120000,
     "gemini-1.5-flash": 120000,
@@ -161,8 +168,8 @@ def construct_iteration_history(
     previous_iterations: List[ResearchIteration],
     previous_iteration_prompt: str,
     query: str = None,
-) -> list[dict]:
-    iteration_history: list[dict] = []
+) -> list[ChatMessageModel]:
+    iteration_history: list[ChatMessageModel] = []
     previous_iteration_messages: list[dict] = []
     for idx, iteration in enumerate(previous_iterations):
         iteration_data = previous_iteration_prompt.format(
@@ -176,46 +183,46 @@ def construct_iteration_history(
 
     if previous_iteration_messages:
         if query:
-            iteration_history.append({"by": "you", "message": query})
+            iteration_history.append(ChatMessageModel(by="you", message=query))
         iteration_history.append(
-            {
-                "by": "khoj",
-                "intent": {"type": "remember", "query": query},
-                "message": previous_iteration_messages,
-            }
+            ChatMessageModel(
+                by="khoj",
+                intent=Intent(type="remember", query=query),
+                message=previous_iteration_messages,
+            )
         )
     return iteration_history
 
 
-def construct_chat_history(conversation_history: dict, n: int = 4, agent_name="AI") -> str:
-    chat_history = ""
-    for chat in conversation_history.get("chat", [])[-n:]:
-        if chat["by"] == "khoj" and chat["intent"].get("type") in ["remember", "reminder", "summarize"]:
-            if chat["intent"].get("inferred-queries"):
-                chat_history += f'{agent_name}: {{"queries": {chat["intent"].get("inferred-queries")}}}\n'
-            chat_history += f"{agent_name}: {chat['message']}\n\n"
-        elif chat["by"] == "khoj" and chat.get("images"):
-            chat_history += f"User: {chat['intent']['query']}\n"
-            chat_history += f"{agent_name}: [generated image redacted for space]\n"
-        elif chat["by"] == "khoj" and ("excalidraw" in chat["intent"].get("type")):
-            chat_history += f"User: {chat['intent']['query']}\n"
-            chat_history += f"{agent_name}: {chat['intent']['inferred-queries'][0]}\n"
-        elif chat["by"] == "you":
-            chat_history += f"User: {chat['message']}\n"
-            raw_query_files = chat.get("queryFiles")
+def construct_chat_history(chat_history: list[ChatMessageModel], n: int = 4, agent_name="AI") -> str:
+    chat_history_str = ""
+    for chat in chat_history[-n:]:
+        intent_type = chat.intent.type if chat.intent and chat.intent.type else ""
+        inferred_queries = chat.intent.inferred_queries if chat.intent else None
+        if chat.by == "khoj" and intent_type in ["remember", "reminder", "summarize"]:
+            if inferred_queries:
+                chat_history_str += f'{agent_name}: {{"queries": {inferred_queries}}}\n'
+            chat_history_str += f"{agent_name}: {chat.message}\n\n"
+        elif chat.by == "khoj" and chat.images:
+            chat_history_str += f"{agent_name}: [generated image redacted for space]\n"
+        elif chat.by == "khoj" and ("excalidraw" in intent_type):
+            chat_history_str += f"{agent_name}: {inferred_queries[0]}\n"
+        elif chat.by == "you":
+            chat_history_str += f"User: {chat.message}\n"
+            raw_query_files = chat.queryFiles
             if raw_query_files:
                 query_files: Dict[str, str] = {}
                 for file in raw_query_files:
                     query_files[file["name"]] = file["content"]
 
                 query_file_context = gather_raw_query_files(query_files)
-                chat_history += f"User: {query_file_context}\n"
+                chat_history_str += f"User: {query_file_context}\n"
 
-    return chat_history
+    return chat_history_str
 
 
 def construct_question_history(
-    conversation_log: dict,
+    conversation_log: list[ChatMessageModel],
     include_query: bool = True,
     lookback: int = 6,
     query_prefix: str = "Q",
@@ -226,16 +233,16 @@ def construct_question_history(
     """
     history_parts = ""
     original_query = None
-    for chat in conversation_log.get("chat", [])[-lookback:]:
-        if chat["by"] == "you":
-            original_query = chat.get("message")
+    for chat in conversation_log[-lookback:]:
+        if chat.by == "you":
+            original_query = json.dumps(chat.message)
             history_parts += f"{query_prefix}: {original_query}\n"
-        if chat["by"] == "khoj":
+        if chat.by == "khoj":
             if original_query is None:
                 continue
 
-            message = chat.get("message", "")
-            inferred_queries_list = chat.get("intent", {}).get("inferred-queries")
+            message = chat.message
+            inferred_queries_list = chat.intent.inferred_queries or []
 
             # Ensure inferred_queries_list is a list, defaulting to the original query in a list
             if not inferred_queries_list:
@@ -246,7 +253,7 @@ def construct_question_history(
 
             if include_query:
                 # Ensure 'type' exists and is a string before checking 'to-image'
-                intent_type = chat.get("intent", {}).get("type", "")
+                intent_type = chat.intent.type if chat.intent and chat.intent.type else ""
                 if "to-image" not in intent_type:
                     history_parts += f'{agent_name}: {{"queries": {inferred_queries_list}}}\n'
                     history_parts += f"A: {message}\n\n"
@@ -259,7 +266,7 @@ def construct_question_history(
     return history_parts
 
 
-def construct_chat_history_for_operator(conversation_history: dict, n: int = 6) -> list[AgentMessage]:
+def construct_chat_history_for_operator(conversation_history: List[ChatMessageModel], n: int = 6) -> list[AgentMessage]:
     """
     Construct chat history for operator agent in conversation log.
     Only include last n completed turns (i.e with user and khoj message).
@@ -267,22 +274,22 @@ def construct_chat_history_for_operator(conversation_history: dict, n: int = 6) 
     chat_history: list[AgentMessage] = []
     user_message: Optional[AgentMessage] = None
 
-    for chat in conversation_history.get("chat", []):
+    for chat in conversation_history:
         if len(chat_history) >= n:
             break
-        if chat["by"] == "you" and chat.get("message"):
-            content = [{"type": "text", "text": chat["message"]}]
-            for file in chat.get("queryFiles", []):
+        if chat.by == "you" and chat.message:
+            content = [{"type": "text", "text": chat.message}]
+            for file in chat.queryFiles or []:
                 content += [{"type": "text", "text": f'## File: {file["name"]}\n\n{file["content"]}'}]
             user_message = AgentMessage(role="user", content=content)
-        elif chat["by"] == "khoj" and chat.get("message"):
-            chat_history += [user_message, AgentMessage(role="assistant", content=chat["message"])]
+        elif chat.by == "khoj" and chat.message:
+            chat_history += [user_message, AgentMessage(role="assistant", content=chat.message)]
     return chat_history
 
 
 def construct_tool_chat_history(
     previous_iterations: List[ResearchIteration], tool: ConversationCommand = None
-) -> Dict[str, list]:
+) -> List[ChatMessageModel]:
     """
     Construct chat history from previous iterations for a specific tool
 
@@ -313,22 +320,23 @@ def construct_tool_chat_history(
             tool or ConversationCommand(iteration.tool), base_extractor
         )
         chat_history += [
-            {
-                "by": "you",
-                "message": iteration.query,
-            },
-            {
-                "by": "khoj",
-                "intent": {
-                    "type": "remember",
-                    "inferred-queries": inferred_query_extractor(iteration),
-                    "query": iteration.query,
-                },
-                "message": iteration.summarizedResult,
-            },
+            ChatMessageModel(
+                by="you",
+                message=iteration.query,
+            ),
+            ChatMessageModel(
+                by="khoj",
+                intent=Intent(
+                    type="remember",
+                    query=iteration.query,
+                    inferred_queries=inferred_query_extractor(iteration),
+                    memory_type="notes",
+                ),
+                message=iteration.summarizedResult,
+            ),
         ]
 
-    return {"chat": chat_history}
+    return chat_history
 
 
 class ChatEvent(Enum):
@@ -349,12 +357,11 @@ def message_to_log(
     chat_response,
     user_message_metadata={},
     khoj_message_metadata={},
-    conversation_log=[],
-):
+    chat_history: List[ChatMessageModel] = [],
+) -> List[ChatMessageModel]:
     """Create json logs from messages, metadata for conversation log"""
     default_khoj_message_metadata = {
         "intent": {"type": "remember", "memory-type": "notes", "query": user_message},
-        "trigger-emotion": "calm",
     }
     khoj_response_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -369,15 +376,31 @@ def message_to_log(
     khoj_log = merge_dicts(khoj_message_metadata, default_khoj_message_metadata)
     khoj_log = merge_dicts({"message": chat_response, "by": "khoj", "created": khoj_response_time}, khoj_log)
 
-    conversation_log.extend([human_log, khoj_log])
-    return conversation_log
+    # Validate message logs
+    # Only validates top-level fields, not nested fields, defined in ChatMessageModel
+    class StrictChatMessageModel(ChatMessageModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+
+    try:
+        StrictChatMessageModel(**human_log)
+    except ValidationError as e:
+        logger.error(f"Validation error in user chat message: {e}\nUser Message: {human_log}\n")
+    try:
+        StrictChatMessageModel(**khoj_log)
+    except ValidationError as e:
+        logger.error(f"Validation error in khoj chat message: {e}\nKhoj Message: {khoj_log}\n")
+
+    human_message = ChatMessageModel(**human_log)
+    khoj_message = ChatMessageModel(**khoj_log)
+    chat_history.extend([human_message, khoj_message])
+    return chat_history
 
 
 async def save_to_conversation_log(
     q: str,
     chat_response: str,
     user: KhojUser,
-    meta_log: Dict,
+    chat_history: List[ChatMessageModel],
     user_message_time: str = None,
     compiled_references: List[Dict[str, Any]] = [],
     online_results: Dict[str, Any] = {},
@@ -427,11 +450,11 @@ async def save_to_conversation_log(
         chat_response=chat_response,
         user_message_metadata=user_message_metadata,
         khoj_message_metadata=khoj_message_metadata,
-        conversation_log=meta_log.get("chat", []),
+        chat_history=chat_history,
     )
     await ConversationAdapters.save_conversation(
         user,
-        {"chat": updated_conversation},
+        updated_conversation,
         client_application=client_application,
         conversation_id=conversation_id,
         user_message=q,
@@ -502,7 +525,7 @@ def gather_raw_query_files(
 def generate_chatml_messages_with_context(
     user_message: str,
     system_message: str = None,
-    conversation_log={},
+    chat_history: list[ChatMessageModel] = [],
     model_name="gpt-4o-mini",
     loaded_model: Optional[Llama] = None,
     max_prompt_size=None,
@@ -529,21 +552,21 @@ def generate_chatml_messages_with_context(
 
     # Extract Chat History for Context
     chatml_messages: List[ChatMessage] = []
-    for chat in conversation_log.get("chat", []):
+    for chat in chat_history:
         message_context = []
         message_attached_files = ""
 
         generated_assets = {}
 
-        chat_message = chat.get("message")
-        role = "user" if chat["by"] == "you" else "assistant"
+        chat_message = chat.message
+        role = "user" if chat.by == "you" else "assistant"
 
         # Legacy code to handle excalidraw diagrams prior to Dec 2024
-        if chat["by"] == "khoj" and "excalidraw" in chat["intent"].get("type", ""):
-            chat_message = chat["intent"].get("inferred-queries")[0]
+        if chat.by == "khoj" and "excalidraw" in chat.intent.type or "":
+            chat_message = (chat.intent.inferred_queries or [])[0]
 
-        if chat.get("queryFiles"):
-            raw_query_files = chat.get("queryFiles")
+        if chat.queryFiles:
+            raw_query_files = chat.queryFiles
             query_files_dict = dict()
             for file in raw_query_files:
                 query_files_dict[file["name"]] = file["content"]
@@ -551,24 +574,24 @@ def generate_chatml_messages_with_context(
             message_attached_files = gather_raw_query_files(query_files_dict)
             chatml_messages.append(ChatMessage(content=message_attached_files, role=role))
 
-        if not is_none_or_empty(chat.get("onlineContext")):
+        if not is_none_or_empty(chat.onlineContext):
             message_context += [
                 {
                     "type": "text",
-                    "text": f"{prompts.online_search_conversation.format(online_results=chat.get('onlineContext'))}",
+                    "text": f"{prompts.online_search_conversation.format(online_results=chat.onlineContext)}",
                 }
             ]
 
-        if not is_none_or_empty(chat.get("codeContext")):
+        if not is_none_or_empty(chat.codeContext):
             message_context += [
                 {
                     "type": "text",
-                    "text": f"{prompts.code_executed_context.format(code_results=chat.get('codeContext'))}",
+                    "text": f"{prompts.code_executed_context.format(code_results=chat.codeContext)}",
                 }
             ]
 
-        if not is_none_or_empty(chat.get("operatorContext")):
-            operator_context = chat.get("operatorContext")
+        if not is_none_or_empty(chat.operatorContext):
+            operator_context = chat.operatorContext
             operator_content = "\n\n".join([f'## Task: {oc["query"]}\n{oc["response"]}\n' for oc in operator_context])
             message_context += [
                 {
@@ -577,13 +600,9 @@ def generate_chatml_messages_with_context(
                 }
             ]
 
-        if not is_none_or_empty(chat.get("context")):
+        if not is_none_or_empty(chat.context):
             references = "\n\n".join(
-                {
-                    f"# File: {item['file']}\n## {item['compiled']}\n"
-                    for item in chat.get("context") or []
-                    if isinstance(item, dict)
-                }
+                {f"# File: {item.file}\n## {item.compiled}\n" for item in chat.context or [] if isinstance(item, dict)}
             )
             message_context += [{"type": "text", "text": f"{prompts.notes_conversation.format(references=references)}"}]
 
@@ -591,14 +610,14 @@ def generate_chatml_messages_with_context(
             reconstructed_context_message = ChatMessage(content=message_context, role="user")
             chatml_messages.insert(0, reconstructed_context_message)
 
-        if not is_none_or_empty(chat.get("images")) and role == "assistant":
+        if not is_none_or_empty(chat.images) and role == "assistant":
             generated_assets["image"] = {
-                "query": chat.get("intent", {}).get("inferred-queries", [user_message])[0],
+                "query": (chat.intent.inferred_queries or [user_message])[0],
             }
 
-        if not is_none_or_empty(chat.get("mermaidjsDiagram")) and role == "assistant":
+        if not is_none_or_empty(chat.mermaidjsDiagram) and role == "assistant":
             generated_assets["diagram"] = {
-                "query": chat.get("intent", {}).get("inferred-queries", [user_message])[0],
+                "query": (chat.intent.inferred_queries or [user_message])[0],
             }
 
         if not is_none_or_empty(generated_assets):
@@ -610,7 +629,7 @@ def generate_chatml_messages_with_context(
             )
 
         message_content = construct_structured_message(
-            chat_message, chat.get("images") if role == "user" else [], model_type, vision_enabled
+            chat_message, chat.images if role == "user" else [], model_type, vision_enabled
         )
 
         reconstructed_message = ChatMessage(content=message_content, role=role)
